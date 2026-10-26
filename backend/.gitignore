@@ -1,0 +1,4 @@
+/.metadata/
+
+# Local launch configurations and password-prompting dev launcher
+local-dev/

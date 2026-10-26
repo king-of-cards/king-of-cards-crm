@@ -1,0 +1,33 @@
+server:
+  port: 8081
+spring:
+  application:
+    name: identity-service
+  mvc:
+    problemdetails:
+      enabled: true
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_DEFAULT_ZONE:http://localhost:8761/eureka/}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+identity:
+  jwt:
+    issuer: ${JWT_ISSUER}
+    audience: ${JWT_AUDIENCE}
+    access-token-ttl: ${IDENTITY_ACCESS_TOKEN_TTL:15m}
+    private-key-location: ${JWT_PRIVATE_KEY_LOCATION}
+  refresh:
+    token-ttl: ${IDENTITY_REFRESH_TOKEN_TTL}
+  cookie:
+    secure: ${IDENTITY_COOKIE_SECURE:true}
+    same-site: ${IDENTITY_COOKIE_SAME_SITE:Lax}
+    allowed-origin: ${CORS_ALLOWED_ORIGIN:http://localhost:5173}
