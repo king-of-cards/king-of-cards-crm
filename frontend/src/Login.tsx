@@ -1,19 +1,31 @@
-
 import { useState, type FormEvent } from "react";
 import "./Login.css";
 
+export type UserRole = "Admin" | "Vendor";
+
+// Which login page this is. It comes from the web address:
+//   /         -> "Admin"   (admin-only login)
+//   /vendor   -> "Vendor"  (vendor-only login)
+//   /login    -> "Any"     (one login for both; credentials decide)
+export type LoginMode = UserRole | "Any";
+
 type LoginProps = {
-  onLogin: () => void;
+  mode: LoginMode;
+  onLogin: (
+    mode: LoginMode,
+    username: string,
+    password: string
+  ) => void;
 };
 
-export default function Login({ onLogin }: LoginProps) {
+export default function Login({ mode, onLogin }: LoginProps) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    onLogin();
+    onLogin(mode, username.trim(), password);
   }
 
   return (
@@ -29,7 +41,9 @@ export default function Login({ onLogin }: LoginProps) {
         />
 
         <h1 className="login-title">King of Cards</h1>
-        <p className="login-subtitle">Cross-Selling CRM</p>
+        <p className="login-subtitle">
+          {mode === "Vendor" ? "Vendor Portal" : "Cross-Selling CRM"}
+        </p>
 
         <form className="login-form" onSubmit={handleSubmit}>
           <label htmlFor="username">Username</label>
@@ -44,6 +58,7 @@ export default function Login({ onLogin }: LoginProps) {
           />
 
           <label htmlFor="password">Password</label>
+
           <div className="password-wrapper">
             <input
               id="password"
@@ -54,6 +69,7 @@ export default function Login({ onLogin }: LoginProps) {
               onChange={(event) => setPassword(event.target.value)}
               required
             />
+
             <button
               type="button"
               className="password-toggle"
