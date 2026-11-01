@@ -1,5 +1,6 @@
-import Login, { type LoginMode, type UserRole } from "./Login";
-import { useEffect, useState } from "react";
+
+import Login, { type UserRole } from "./Login";
+import { useEffect, useState, type FormEvent } from "react";
 import "./CRMApp.css";
 
 type Service =
@@ -8,7 +9,7 @@ type Service =
   | "Wedding Planning"
   | "Make-up Artist";
 
-type LeadStage = "Contacted" | "Interested" | "Converted";
+type LeadStage = "Called" | "Interested" | "Converted" | "Not Interested" | "WhatsApp";
 
 type LeadNote = {
   id: number;
@@ -77,7 +78,7 @@ const sampleLeads: Lead[] = [
   {
     id: 1, name: "Abhishek N.", email: "abhishek@example.com",
     phone: "+91 90000 59978", service: "Photography",
-    stage: "Contacted", source: "POS customer data", vendor: "Phodeo",
+    stage: "Called", source: "POS customer data", vendor: "Phodeo",
     assignedDate: "20 Oct 2026", followUp: "30 Oct 2026",
     followUpDate: "2026-10-30", followUpTime: "11:00", notes: [],
   },
@@ -105,7 +106,7 @@ const sampleLeads: Lead[] = [
   {
     id: 5, name: "Priya S.", email: "priya@example.com",
     phone: "+91 90000 34011", service: "Make-up Artist",
-    stage: "Contacted", source: "WhatsApp campaign", vendor: "Glam Studio",
+    stage: "Called", source: "WhatsApp campaign", vendor: "Glam Studio",
     assignedDate: "23 Oct 2026", followUp: "02 Nov 2026",
     followUpDate: "2026-11-02", followUpTime: "14:00", notes: [],
   },
@@ -119,7 +120,7 @@ const sampleLeads: Lead[] = [
   {
     id: 7, name: "Neha P.", email: "neha@example.com",
     phone: "+91 90000 34013", service: "Wedding Planning",
-    stage: "Contacted", source: "Website enquiry", vendor: "Dream Weddings",
+    stage: "Called", source: "Website enquiry", vendor: "Dream Weddings",
     assignedDate: "24 Oct 2026", followUp: "04 Nov 2026",
     followUpDate: "2026-11-04", followUpTime: "15:00", notes: [],
   },
@@ -133,7 +134,7 @@ const sampleLeads: Lead[] = [
   {
     id: 9, name: "Rohan B.", email: "rohan@example.com",
     phone: "+91 90000 34015", service: "Photography",
-    stage: "Contacted", source: "Website enquiry", vendor: "Phodeo",
+    stage: "Called", source: "Website enquiry", vendor: "Phodeo",
     assignedDate: "25 Oct 2026", followUp: "05 Nov 2026",
     followUpDate: "2026-11-05", followUpTime: "10:00", notes: [],
   },
@@ -146,11 +147,17 @@ const sampleLeads: Lead[] = [
   },
 ];
 
+type VendorAccount = {
+  username: string;
+  password: string;
+  vendorName: string;
+};
+
 /*
  * DEMO ACCOUNTS ONLY.
  * Replace this with backend authentication when your Java API is ready.
  */
-const vendorAccounts = [
+const initialVendorAccounts: VendorAccount[] = [
   { username: "phodeo", password: "123456", vendorName: "Phodeo" },
   { username: "rjphotography", password: "123456", vendorName: "RJ Photography" },
   { username: "onehorizon", password: "123456", vendorName: "One Horizon" },
@@ -165,33 +172,96 @@ const vendorAccounts = [
   { username: "blushandglow", password: "123456", vendorName: "Blush & Glow" },
 ];
 
-// Which login page to show, based on the web address:
-//   http://localhost:5173/         -> Admin login
-//   http://localhost:5173/vendor   -> Vendor login
-function getLoginRole(): UserRole {
-  return window.location.pathname.toLowerCase().startsWith("/vendor")
-    ? "Vendor"
-    : "Admin";
-}
 /*
  * DEMO ADMIN ACCOUNT ONLY.
  * Change these, and replace this check with the Java backend login later.
  */
 const adminAccount = { username: "admin", password: "admin123" };
 
-// Which login page to show, based on the web address:
-//   /         -> Admin-only login
-//   /vendor   -> Vendor-only login
-//   /login    -> One login for both: credentials decide the dashboard
-function getLoginMode(): LoginMode {
-  const path = window.location.pathname.toLowerCase();
+// Saves a value in the browser (localStorage) so it survives a page refresh.
+// Temporary: this goes away once the Java backend and database are connected.
+function usePersistentState<T>(key: string, initialValue: T) {
+  const [value, setValue] = useState<T>(() => {
+    try {
+      const saved = localStorage.getItem(key);
+      return saved ? (JSON.parse(saved) as T) : initialValue;
+    } catch {
+      return initialValue;
+    }
+  });
 
-  if (path.startsWith("/vendor")) return "Vendor";
-  if (path.startsWith("/login")) return "Any";
-  return "Admin";
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+      // Storage is full or blocked. The app still works without it.
+    }
+  }, [key, value]);
+
+  return [value, setValue] as const;
 }
 
+// Remembers who is signed in while this browser tab is open,
+// so a refresh keeps you on your own dashboard.
+const SESSION_KEY = "koc-crm-session";
+
+type Session = { role: UserRole; vendorName: string };
+
+function loadSession(): Session | null {
+  try {
+    const saved = sessionStorage.getItem(SESSION_KEY);
+    if (!saved) return null;
+
+    const parsed = JSON.parse(saved) as Session;
+    return parsed.role === "Admin" || parsed.role === "Vendor" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+// Fields of the "Add Vendor" form.
+type VendorForm = {
+  name: string;
+  service: Service;
+  location: string;
+  phone: string;
+  email: string;
+  username: string;
+  password: string;
+};
+
+const emptyVendorForm: VendorForm = {
+  name: "",
+  service: "Photography",
+  location: "Bengaluru",
+  phone: "",
+  email: "",
+  username: "",
+  password: "",
+};
+
 // "2026-10-30" -> "30 Oct 2026"
+function normalizeLeadStage(value: string): LeadStage {
+  const normalized = value.trim().toLowerCase().replace(/\s+/g, " ");
+
+  switch (normalized) {
+    case "contacted":
+    case "called":
+      return "Called";
+    case "interested":
+      return "Interested";
+    case "converted":
+      return "Converted";
+    case "notinterested":
+    case "not interested":
+      return "Not Interested";
+    case "whatsapp":
+      return "WhatsApp";
+    default:
+      return "Called";
+  }
+}
+
 function formatFollowUpDate(date: string) {
   if (!date) return "Not scheduled";
   return new Date(`${date}T00:00:00`).toLocaleDateString("en-IN", {
@@ -223,9 +293,13 @@ function formatNoteDateTime(iso: string) {
 }
 
 function App() {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [userRole, setUserRole] = useState<UserRole>("Admin");
-  const [currentVendorName, setCurrentVendorName] = useState("");
+  const [isLoggedIn, setIsLoggedIn] = useState(() => loadSession() !== null);
+  const [userRole, setUserRole] = useState<UserRole>(
+    () => loadSession()?.role ?? "Admin"
+  );
+  const [currentVendorName, setCurrentVendorName] = useState(
+    () => loadSession()?.vendorName ?? ""
+  );
   const [activePage, setActivePage] = useState("Home");
   const [search, setSearch] = useState("");
   const [showSignOut, setShowSignOut] = useState(false);
@@ -237,8 +311,36 @@ function App() {
   const [leadSearch, setLeadSearch] = useState("");
   const [dashboardVendor, setDashboardVendor] = useState("All");
 
-  // Keep leads in React state so edits update every table.
-  const [leads, setLeads] = useState<Lead[]>(sampleLeads);
+  // Leads, vendors and vendor logins are kept in React state (and saved in the
+  // browser for now) so admin edits update every screen.
+  const [leads, setLeads] = usePersistentState<Lead[]>(
+    "koc-crm-leads-v1",
+    sampleLeads
+  );
+  // Migrate old status spellings already saved in this browser.
+  useEffect(() => {
+    let needsMigration = false;
+    const normalizedLeads = leads.map((lead) => {
+      const stage = normalizeLeadStage(String(lead.stage));
+      if (stage !== lead.stage) needsMigration = true;
+      return stage === lead.stage ? lead : { ...lead, stage };
+    });
+
+    if (needsMigration) setLeads(normalizedLeads);
+  }, [leads, setLeads]);
+
+  const [vendors, setVendors] = usePersistentState<Vendor[]>(
+    "koc-crm-vendors-v1",
+    sampleVendors
+  );
+  const [vendorAccounts, setVendorAccounts] = usePersistentState<
+    VendorAccount[]
+  >("koc-crm-vendor-accounts-v1", initialVendorAccounts);
+
+  // "Add Vendor" form (admin only).
+  const [showAddVendor, setShowAddVendor] = useState(false);
+  const [vendorForm, setVendorForm] = useState<VendorForm>(emptyVendorForm);
+  const [vendorFormError, setVendorFormError] = useState("");
 
   // Lead Details drawer state.
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
@@ -269,17 +371,57 @@ function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [selectedLeadId]);
 
-  // Login and automatically identify the vendor.
+  // Remember the signed-in user for this browser tab.
+  useEffect(() => {
+    try {
+      if (isLoggedIn) {
+        sessionStorage.setItem(
+          SESSION_KEY,
+          JSON.stringify({ role: userRole, vendorName: currentVendorName })
+        );
+      } else {
+        sessionStorage.removeItem(SESSION_KEY);
+      }
+    } catch {
+      // Storage blocked. Signing in still works, a refresh will sign out.
+    }
+  }, [isLoggedIn, userRole, currentVendorName]);
+
+  // Automatic routing: the web address always matches who is signed in.
+  //   signed out  -> /        (the one login page)
+  //   admin       -> /admin
+  //   vendor      -> /vendor
+  useEffect(() => {
+    function syncRoute() {
+      const expected = !isLoggedIn
+        ? "/"
+        : userRole === "Admin"
+          ? "/admin"
+          : "/vendor";
+
+      if (window.location.pathname !== expected) {
+        window.history.replaceState(null, "", expected);
+      }
+    }
+
+    syncRoute();
+    window.addEventListener("popstate", syncRoute);
+    return () => window.removeEventListener("popstate", syncRoute);
+  }, [isLoggedIn, userRole]);
+
+  // One login page for everyone. The username and password decide the
+  // dashboard: admin details -> Admin dashboard, vendor details -> that
+  // vendor's own dashboard.
   if (!isLoggedIn) {
     return (
-        <Login
-        mode={getLoginMode()}
-        onLogin={(mode, username, password) => {
+      <Login
+        mode="Any"
+        onLogin={(_mode, username, password) => {
           const isAdmin =
             username.toLowerCase() === adminAccount.username &&
             password === adminAccount.password;
 
-          if (isAdmin && mode !== "Vendor") {
+          if (isAdmin) {
             setUserRole("Admin");
             setCurrentVendorName("");
             setActivePage("Home");
@@ -288,14 +430,11 @@ function App() {
             return;
           }
 
-          const account =
-            mode === "Admin"
-              ? undefined
-              : vendorAccounts.find(
-                  (vendor) =>
-                    vendor.username.toLowerCase() === username.toLowerCase() &&
-                    vendor.password === password
-                );
+          const account = vendorAccounts.find(
+            (vendor) =>
+              vendor.username.toLowerCase() === username.toLowerCase() &&
+              vendor.password === password
+          );
 
           if (!account) {
             alert("Invalid username or password");
@@ -319,11 +458,10 @@ function App() {
     { name: "Vendors", icon: "♙" },
     { name: "Leads", icon: "☷" },
     { name: "Follow-ups", icon: "◷" },
-    { name: "Cross-selling", icon: "⇄" },
     { name: "Reports", icon: "▥" },
   ];
 
-  const filteredVendors = sampleVendors.filter((vendor) => {
+  const filteredVendors = vendors.filter((vendor) => {
     const matchesSearch =
       `${vendor.name} ${vendor.location} ${vendor.service}`
         .toLowerCase()
@@ -351,7 +489,7 @@ function App() {
     ? leads.filter((lead) => lead.vendor === selectedVendor.name)
     : [];
 
-  const loggedInVendor = sampleVendors.find(
+  const loggedInVendor = vendors.find(
     (vendor) => vendor.name === currentVendorName
   );
 
@@ -375,13 +513,19 @@ function App() {
   const vendorDashboardCounts = {
     total: loggedInVendorLeads.length,
     contacted: loggedInVendorLeads.filter(
-      (lead) => lead.stage === "Contacted"
+      (lead) => lead.stage === "Called"
     ).length,
     interested: loggedInVendorLeads.filter(
       (lead) => lead.stage === "Interested"
     ).length,
     converted: loggedInVendorLeads.filter(
       (lead) => lead.stage === "Converted"
+    ).length,
+    notInterested: loggedInVendorLeads.filter(
+      (lead) => lead.stage === "Not Interested"
+    ).length,
+    whatsapp: loggedInVendorLeads.filter(
+      (lead) => lead.stage === "WhatsApp"
     ).length,
   };
 
@@ -407,9 +551,12 @@ function App() {
 
   const leadCounts = {
     total: vendorLeads.length,
-    contacted: vendorLeads.filter((lead) => lead.stage === "Contacted").length,
+    called:vendorLeads.filter((lead) => lead.stage === "Called").length,
     interested: vendorLeads.filter((lead) => lead.stage === "Interested").length,
     converted: vendorLeads.filter((lead) => lead.stage === "Converted").length,
+    notInterested: vendorLeads.filter((lead) => lead.stage === "Not Interested").length,
+    whatsapp: vendorLeads.filter((lead) => lead.stage === "WhatsApp").length,
+
   };
 
   function openVendor(vendor: Vendor) {
@@ -452,50 +599,190 @@ function App() {
     setDashboardVendor("All");
   }
 
-  /* ---------- Lead Details drawer: admin-only edits ---------- */
+  /* ---------- Admin: add and remove vendors ---------- */
 
-  // Only Admin can change lead fields.
+  function openAddVendor() {
+    if (userRole !== "Admin") return;
+
+    setVendorForm(emptyVendorForm);
+    setVendorFormError("");
+    setShowAddVendor(true);
+  }
+
+  function closeAddVendor() {
+    setShowAddVendor(false);
+    setVendorForm(emptyVendorForm);
+    setVendorFormError("");
+  }
+
+  function updateVendorForm(patch: Partial<VendorForm>) {
+    setVendorForm((current) => ({ ...current, ...patch }));
+    setVendorFormError("");
+  }
+
+  function addVendor(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (userRole !== "Admin") return;
+
+    const name = vendorForm.name.trim();
+    const username = vendorForm.username.trim().toLowerCase();
+    const password = vendorForm.password;
+
+    if (!name) {
+      setVendorFormError("Please enter the vendor name.");
+      return;
+    }
+
+    if (vendors.some((vendor) => vendor.name.toLowerCase() === name.toLowerCase())) {
+      setVendorFormError("A vendor with this name already exists.");
+      return;
+    }
+
+    if (!username || /\s/.test(username)) {
+      setVendorFormError("Enter a login username without spaces.");
+      return;
+    }
+
+    if (
+      username === adminAccount.username ||
+      vendorAccounts.some((account) => account.username.toLowerCase() === username)
+    ) {
+      setVendorFormError("This username is already taken. Choose another one.");
+      return;
+    }
+
+    if (password.length < 6) {
+      setVendorFormError("The password must be at least 6 characters.");
+      return;
+    }
+
+    const nextId = vendors.reduce((highest, vendor) => Math.max(highest, vendor.id), 0) + 1;
+
+    setVendors((current) => [
+      ...current,
+      {
+        id: nextId,
+        name,
+        service: vendorForm.service,
+        location: vendorForm.location.trim() || "Not provided",
+        phone: vendorForm.phone.trim(),
+        email: vendorForm.email.trim(),
+        status: "Active",
+      },
+    ]);
+
+    setVendorAccounts((current) => [
+      ...current,
+      { username, password, vendorName: name },
+    ]);
+
+    closeAddVendor();
+  }
+
+  function removeVendor(vendor: Vendor) {
+    if (userRole !== "Admin") return;
+
+    const assignedCount = leads.filter((lead) => lead.vendor === vendor.name).length;
+
+    const message =
+      `Remove ${vendor.name}?\n\nTheir login will stop working immediately.` +
+      (assignedCount > 0
+        ? `\n${assignedCount} lead${assignedCount === 1 ? "" : "s"} assigned to this vendor will be marked "Unassigned".`
+        : "");
+
+    if (!window.confirm(message)) return;
+
+    setVendors((current) => current.filter((item) => item.id !== vendor.id));
+    setVendorAccounts((current) =>
+      current.filter((account) => account.vendorName !== vendor.name)
+    );
+    setLeads((current) =>
+      current.map((lead) =>
+        lead.vendor === vendor.name ? { ...lead, vendor: "Unassigned" } : lead
+      )
+    );
+
+    if (dashboardVendor === vendor.name) setDashboardVendor("All");
+    setSelectedVendor(null);
+  }
+
+  /* ---------- Lead Details drawer: role-based permissions ---------- */
+
+  // Admin can edit every lead. A vendor can edit only leads assigned to
+  // the vendor account that is currently signed in.
+  function canCurrentUserEditLead(lead: Lead) {
+    return (
+      userRole === "Admin" ||
+      (userRole === "Vendor" && lead.vendor === currentVendorName)
+    );
+  }
+
+  // Vendors can edit/delete only interaction notes they personally added.
+  // Admin can manage every note on every lead.
+  function canCurrentUserEditNote(note: LeadNote) {
+    if (userRole === "Admin") return true;
+
+    return (
+      userRole === "Vendor" &&
+      selectedLead !== null &&
+      canCurrentUserEditLead(selectedLead) &&
+      note.addedBy === currentVendorName
+    );
+  }
+
   function updateSelectedLead(patch: Partial<Lead>) {
-    if (userRole !== "Admin" || selectedLeadId === null) return;
+    if (!selectedLead || !canCurrentUserEditLead(selectedLead)) return;
 
     setLeads((currentLeads) =>
       currentLeads.map((lead) =>
-        lead.id === selectedLeadId ? { ...lead, ...patch } : lead
+        lead.id === selectedLead.id ? { ...lead, ...patch } : lead
       )
     );
   }
 
   function changeLeadStage(stage: LeadStage) {
-    if (!selectedLead) return;
+    if (!selectedLead || !canCurrentUserEditLead(selectedLead)) return;
 
     updateSelectedLead({
       stage,
       followUp:
-        stage === "Converted"
+        stage === "Called"
           ? "Completed"
           : formatFollowUpDate(selectedLead.followUpDate),
     });
   }
 
+  // Follow-up scheduling remains Admin-only.
   function changeFollowUpDate(date: string) {
-    if (!selectedLead) return;
+    if (userRole !== "Admin" || !selectedLead) return;
 
     updateSelectedLead({
       followUpDate: date,
       followUp:
-        selectedLead.stage === "Converted"
+        selectedLead.stage === "Called"
           ? "Completed"
           : formatFollowUpDate(date),
     });
   }
 
+  function changeFollowUpTime(time: string) {
+    if (userRole !== "Admin" || !selectedLead) return;
+    updateSelectedLead({ followUpTime: time });
+  }
+
   function addLeadNote() {
-    if (userRole !== "Admin" || !selectedLead || !newNote.trim()) return;
+    if (
+      !selectedLead ||
+      !canCurrentUserEditLead(selectedLead) ||
+      !newNote.trim()
+    ) {
+      return;
+    }
 
     const note: LeadNote = {
       id: Date.now(),
       text: newNote.trim(),
-      addedBy: "CRM Admin",
+      addedBy: userRole === "Admin" ? "CRM Admin" : currentVendorName,
       createdAt: new Date().toISOString(),
     };
 
@@ -507,21 +794,21 @@ function App() {
   }
 
   function startEditingNote(note: LeadNote) {
-    if (userRole !== "Admin") return;
+    if (!canCurrentUserEditNote(note)) return;
 
     setEditingNoteId(note.id);
     setEditingNoteText(note.text);
   }
 
   function saveEditedNote() {
-    if (
-      userRole !== "Admin" ||
-      !selectedLead ||
-      editingNoteId === null ||
-      !editingNoteText.trim()
-    ) {
+    if (!selectedLead || editingNoteId === null || !editingNoteText.trim()) {
       return;
     }
+
+    const noteBeingEdited = selectedLead.notes.find(
+      (note) => note.id === editingNoteId
+    );
+    if (!noteBeingEdited || !canCurrentUserEditNote(noteBeingEdited)) return;
 
     updateSelectedLead({
       notes: selectedLead.notes.map((note) =>
@@ -540,7 +827,12 @@ function App() {
   }
 
   function deleteLeadNote(noteId: number) {
-    if (userRole !== "Admin" || !selectedLead) return;
+    if (!selectedLead) return;
+
+    const noteToDelete = selectedLead.notes.find(
+      (note) => note.id === noteId
+    );
+    if (!noteToDelete || !canCurrentUserEditNote(noteToDelete)) return;
 
     const confirmed = window.confirm("Delete this interaction note?");
     if (!confirmed) return;
@@ -561,6 +853,7 @@ function App() {
     if (!selectedLead) return null;
 
     const isAdmin = userRole === "Admin";
+    const canEditLead = canCurrentUserEditLead(selectedLead);
 
     // Newest note first.
     const sortedNotes = [...selectedLead.notes].sort(
@@ -594,7 +887,7 @@ function App() {
               <h2 id="lead-drawer-title">{selectedLead.name}</h2>
               <p>
                 {selectedLead.service}
-                {!isAdmin && <span className="view-only-badge">View only</span>}
+                {!isAdmin && <span className="Editable-badge">Editable</span>}
               </p>
             </div>
 
@@ -671,14 +964,17 @@ function App() {
                 <span>Lead Status</span>
                 <select
                   value={selectedLead.stage}
-                  disabled={!isAdmin}
+                  disabled={!canEditLead}
                   onChange={(event) =>
                     changeLeadStage(event.target.value as LeadStage)
                   }
                 >
-                  <option value="Contacted">Contacted</option>
+                  <option value="Called">Called</option>
                   <option value="Interested">Interested</option>
                   <option value="Converted">Converted</option>
+                  <option value="Not Interested">Not Interested</option>
+                  <option value="WhatsApp">WhatsApp</option>
+
                 </select>
               </label>
 
@@ -699,9 +995,7 @@ function App() {
                     type="time"
                     value={selectedLead.followUpTime}
                     disabled={!isAdmin}
-                    onChange={(event) =>
-                      updateSelectedLead({ followUpTime: event.target.value })
-                    }
+                    onChange={(event) => changeFollowUpTime(event.target.value)}
                   />
                 </label>
               </div>
@@ -712,7 +1006,8 @@ function App() {
 
               {!isAdmin && (
                 <p className="drawer-hint">
-                  Only an Admin can change the lead status, follow-up or notes.
+                  You can update the status of your assigned leads and manage notes
+                  you added. Follow-up date and time are managed by Admin.
                 </p>
               )}
             </section>
@@ -731,7 +1026,7 @@ function App() {
                 Record calls, customer conversations, and follow-up outcomes.
               </p>
 
-              {isAdmin && (
+              {canEditLead && (
                 <div className="note-composer">
                   <textarea
                     value={newNote}
@@ -760,7 +1055,7 @@ function App() {
                   <div className="notes-list">
                     {visibleNotes.map((note) => (
                       <article className="note-card" key={note.id}>
-                        {editingNoteId === note.id && isAdmin ? (
+                        {editingNoteId === note.id && canCurrentUserEditNote(note) ? (
                           <div className="note-edit-area">
                             <textarea
                               value={editingNoteText}
@@ -812,7 +1107,7 @@ function App() {
                           </span>
                         </div>
 
-                        {isAdmin && editingNoteId !== note.id && (
+                        {canCurrentUserEditNote(note) && editingNoteId !== note.id && (
                           <div className="note-admin-actions">
                             <button
                               type="button"
@@ -872,7 +1167,12 @@ function App() {
             <h2>Vendor Directory</h2>
             <p>Explore and manage your service partners.</p>
           </div>
-          <span className="vendor-total">{filteredVendors.length} vendors</span>
+          <div className="vendor-heading-actions">
+            <span className="vendor-total">{filteredVendors.length} vendors</span>
+            <button className="button-primary" onClick={openAddVendor}>
+              + Add Vendor
+            </button>
+          </div>
         </div>
 
         <div className="vendor-toolbar">
@@ -969,19 +1269,27 @@ function App() {
               <p>{selectedVendor.location}</p>
             </div>
 
-            <span className={`vendor-status ${selectedVendor.status.toLowerCase()}`}>
-              {selectedVendor.status}
-            </span>
+            <div className="vendor-profile-actions">
+              <span className={`vendor-status ${selectedVendor.status.toLowerCase()}`}>
+                {selectedVendor.status}
+              </span>
+              <button
+                className="button-danger-outline"
+                onClick={() => removeVendor(selectedVendor)}
+              >
+                Remove Vendor
+              </button>
+            </div>
           </div>
 
           <div className="vendor-detail-grid">
             <div>
               <small>Phone Number</small>
-              <strong>{selectedVendor.phone}</strong>
+              <strong>{selectedVendor.phone || "Not provided"}</strong>
             </div>
             <div>
               <small>Email Address</small>
-              <strong>{selectedVendor.email}</strong>
+              <strong>{selectedVendor.email || "Not provided"}</strong>
             </div>
             <div>
               <small>Service</small>
@@ -990,6 +1298,14 @@ function App() {
             <div>
               <small>Location</small>
               <strong>{selectedVendor.location}</strong>
+            </div>
+            <div>
+              <small>Login Username</small>
+              <strong>
+                {vendorAccounts.find(
+                  (account) => account.vendorName === selectedVendor.name
+                )?.username ?? "Not set"}
+              </strong>
             </div>
           </div>
         </div>
@@ -1008,8 +1324,8 @@ function App() {
               <strong>{leadCounts.total}</strong>
             </article>
             <article className="vendor-lead-kpi">
-              <span>Contacted</span>
-              <strong>{leadCounts.contacted}</strong>
+              <span>Called</span>
+              <strong>{leadCounts.called}</strong>
             </article>
             <article className="vendor-lead-kpi">
               <span>Interested</span>
@@ -1043,9 +1359,11 @@ function App() {
               onChange={(event) => setStageFilter(event.target.value)}
             >
               <option value="All">All stages</option>
-              <option value="Contacted">Contacted</option>
+              <option value="Called">Called</option>
               <option value="Interested">Interested</option>
               <option value="Converted">Converted</option>
+              <option value="Not Interested">Not Interested</option>
+              <option value="WhatsApp">WhatsApp</option>
             </select>
           </div>
 
@@ -1110,6 +1428,128 @@ function App() {
           </div>
         </section>
       </section>
+    );
+  }
+
+  /* ---------- Admin: "Add Vendor" pop-up ---------- */
+
+  function renderAddVendorModal() {
+    if (!showAddVendor) return null;
+
+    return (
+      <div className="modal-backdrop" onClick={closeAddVendor}>
+        <section
+          className="confirm-modal vendor-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="add-vendor-title"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <h2 id="add-vendor-title">Add Vendor</h2>
+
+          <p>
+            Create a vendor partner and the login they will use to see their own
+            leads.
+          </p>
+
+          <form className="vendor-form" onSubmit={addVendor}>
+            <div className="form-grid">
+              <label className="form-field form-field-wide">
+                <span>Vendor name *</span>
+                <input
+                  value={vendorForm.name}
+                  onChange={(event) => updateVendorForm({ name: event.target.value })}
+                  placeholder="e.g. Lens Studio"
+                  autoFocus
+                />
+              </label>
+
+              <label className="form-field">
+                <span>Service *</span>
+                <select
+                  value={vendorForm.service}
+                  onChange={(event) =>
+                    updateVendorForm({ service: event.target.value as Service })
+                  }
+                >
+                  {services.map((service) => (
+                    <option key={service}>{service}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="form-field">
+                <span>Location</span>
+                <input
+                  value={vendorForm.location}
+                  onChange={(event) => updateVendorForm({ location: event.target.value })}
+                  placeholder="e.g. Bengaluru"
+                />
+              </label>
+
+              <label className="form-field">
+                <span>Phone</span>
+                <input
+                  value={vendorForm.phone}
+                  onChange={(event) => updateVendorForm({ phone: event.target.value })}
+                  placeholder="+91 90000 00000"
+                />
+              </label>
+
+              <label className="form-field">
+                <span>Email</span>
+                <input
+                  type="email"
+                  value={vendorForm.email}
+                  onChange={(event) => updateVendorForm({ email: event.target.value })}
+                  placeholder="name@example.com"
+                />
+              </label>
+
+              <label className="form-field">
+                <span>Login username *</span>
+                <input
+                  value={vendorForm.username}
+                  onChange={(event) => updateVendorForm({ username: event.target.value })}
+                  placeholder="e.g. lensstudio"
+                  autoCapitalize="none"
+                  autoComplete="off"
+                />
+              </label>
+
+              <label className="form-field">
+                <span>Login password *</span>
+                <input
+                  value={vendorForm.password}
+                  onChange={(event) => updateVendorForm({ password: event.target.value })}
+                  placeholder="At least 6 characters"
+                  autoComplete="off"
+                />
+              </label>
+            </div>
+
+            {vendorFormError && (
+              <div className="form-error" role="alert">
+                {vendorFormError}
+              </div>
+            )}
+
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="button-secondary"
+                onClick={closeAddVendor}
+              >
+                Cancel
+              </button>
+
+              <button type="submit" className="button-primary">
+                + Add Vendor
+              </button>
+            </div>
+          </form>
+        </section>
+      </div>
     );
   }
 
@@ -1218,7 +1658,7 @@ function App() {
               </article>
 
               <article className="vendor-lead-kpi">
-                <span>Contacted</span>
+                <span>Called</span>
                 <strong>{vendorDashboardCounts.contacted}</strong>
               </article>
 
@@ -1260,9 +1700,11 @@ function App() {
                 onChange={(event) => setStageFilter(event.target.value)}
               >
                 <option value="All">All stages</option>
-                <option value="Contacted">Contacted</option>
+                <option value="Called">Called</option>
                 <option value="Interested">Interested</option>
                 <option value="Converted">Converted</option>
+                <option value="Not Interested">Not Interested</option>
+                <option value="WhatsApp">WhatsApp</option>
               </select>
             </div>
 
@@ -1390,7 +1832,7 @@ function App() {
           />
           <span>
             <strong>King of Cards</strong>
-            <small>CROSS-SELLING CRM</small>
+            <small>CROSS-SELLING CRM ⇄</small>
           </span>
         </a>
 
@@ -1428,7 +1870,7 @@ function App() {
                       </button>
 
                       <div className="vendor-submenu">
-                        {sampleVendors
+                        {vendors
                           .filter((vendor) => vendor.service === service)
                           .map((vendor) => (
                             <button
@@ -1556,7 +1998,7 @@ function App() {
                     onChange={(event) => setDashboardVendor(event.target.value)}
                   >
                     <option value="All">All vendors</option>
-                    {sampleVendors.map((vendor) => (
+                    {vendors.map((vendor) => (
                       <option key={vendor.id} value={vendor.name}>
                         {vendor.name}
                       </option>
@@ -1620,10 +2062,12 @@ function App() {
                 </select>
 
                 <select aria-label="Filter by stage" defaultValue="all">
-                  <option value="all">All stages</option>
-                  <option>Contacted</option>
+                  <option value="all">All status</option>
+                  <option>Called</option>
                   <option>Interested</option>
                   <option>Converted</option>
+                   <option>Not Interested</option>
+                    <option value="WhatsApp">WhatsApp</option>
                 </select>
 
                 <input
@@ -1811,6 +2255,8 @@ function App() {
       )}
 
       {renderLeadDrawer()}
+
+      {renderAddVendorModal()}
     </div>
   );
 }

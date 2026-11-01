@@ -1812,3 +1812,99 @@ textarea:focus-visible {
   color: #7d7d87;
   font-style: normal;
 }
+/* =========================================
+   VENDOR MANAGEMENT (add / remove)
+========================================= */
+
+.vendor-heading-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.vendor-profile-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.button-danger-outline {
+  min-height: 34px;
+  padding: 7px 13px;
+  border: 1px solid #a94d5d;
+  border-radius: 7px;
+  background: transparent;
+  color: #f1b6c1;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.button-danger-outline:hover {
+  background: #382027;
+}
+
+.vendor-modal {
+  max-width: 580px;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+}
+
+.vendor-modal > p {
+  margin-bottom: 18px;
+  font-size: 13px;
+}
+
+.vendor-form {
+  display: grid;
+  gap: 16px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.form-field > span {
+  color: #a9a9b2;
+  font-size: 12px;
+}
+
+.form-field input,
+.form-field select {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+}
+
+.form-field-wide {
+  grid-column: 1 / -1;
+}
+
+.form-error {
+  padding: 10px 12px;
+  border: 1px solid #66404a;
+  border-radius: 7px;
+  background: #301b22;
+  color: #f1b6c1;
+  font-size: 12px;
+}
+
+@media (max-width: 600px) {
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .vendor-profile-actions {
+    align-items: flex-start;
+  }
+}

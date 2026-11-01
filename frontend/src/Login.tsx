@@ -42,7 +42,7 @@ export default function Login({ mode, onLogin }: LoginProps) {
 
         <h1 className="login-title">King of Cards</h1>
         <p className="login-subtitle">
-          {mode === "Vendor" ? "Vendor Portal" : "Cross-Selling CRM"}
+          {mode === "Vendor" ? "Vendor Portal" : "Cross-Selling CRM ⇄"}
         </p>
 
         <form className="login-form" onSubmit={handleSubmit}>
