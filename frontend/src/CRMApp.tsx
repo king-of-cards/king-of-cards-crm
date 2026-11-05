@@ -1,6 +1,19 @@
-
 import Login, { type UserRole } from "./Login";
 import { useEffect, useState, type FormEvent } from "react";
+import BulkUploadModal, { type NewLeadInput } from "./BulkUploadModal";
+import VendorPerformance from "./VendorPerformance";
+import {
+  canImport,
+  checkRows,
+  downloadTextFile,
+  toCsv,
+} from "./leadUtils";
+import {
+  LeadFilterBar,
+  applyLeadFilters,
+  emptyFilters,
+  type LeadFilters,
+} from "./LeadFilters";
 import "./CRMApp.css";
 
 type Service =
@@ -9,7 +22,13 @@ type Service =
   | "Wedding Planning"
   | "Make-up Artist";
 
-type LeadStage = "Called" | "Interested" | "Converted" | "Not Interested" | "WhatsApp";
+type LeadStage =
+  | "Called"
+  | "Interested"
+  | "Quotation Sent"
+  | "Converted"
+  | "Not Interested"
+  | "WhatsApp";
 
 type LeadNote = {
   id: number;
@@ -17,6 +36,17 @@ type LeadNote = {
   addedBy: string;
   createdAt: string;
   editedAt?: string;
+};
+
+// A file attached to a quotation. Saved in the browser for now (data URL).
+type QuotationFile = {
+  id: number;
+  name: string;
+  type: string;
+  size: number;
+  dataUrl: string;
+  addedBy: string;
+  addedAt: string;
 };
 
 type Lead = {
@@ -33,15 +63,17 @@ type Lead = {
   followUpDate: string;
   followUpTime: string;
   notes: LeadNote[];
+  // Who brought this lead: King of Cards gave it to the vendor, or the vendor
+  // uploaded it themselves. Old leads without this field count as King of Cards.
+  origin?: "King of Cards" | "Vendor";
+  // Custom quotation entered by the vendor, in rupees.
+  quotationAmount?: number;
+  quotationUpdatedAt?: string;
+  // The date the quotation was shared with the customer ("2026-11-04").
+  quotationDate?: string;
+  quotationFiles?: QuotationFile[];
 };
 
-/*
- * NOTE: the file you sent did not contain the Vendor type or the
- * sampleVendors list (the code uses them), so they are rebuilt here from
- * your vendorAccounts. If your own project already has a Vendor type and a
- * sampleVendors list with real phone/email/location, KEEP YOUR OWN and
- * delete this block.
- */
 type Vendor = {
   id: number;
   name: string;
@@ -240,28 +272,78 @@ const emptyVendorForm: VendorForm = {
   password: "",
 };
 
-// "2026-10-30" -> "30 Oct 2026"
-function normalizeLeadStage(value: string): LeadStage {
-  const normalized = value.trim().toLowerCase().replace(/\s+/g, " ");
+// Fields of the "Assign Lead" form (admin, on a vendor's profile page).
+type AssignForm = {
+  name: string;
+  phone: string;
+  email: string;
+  source: string;
+};
 
-  switch (normalized) {
-    case "contacted":
-    case "called":
-      return "Called";
-    case "interested":
-      return "Interested";
-    case "converted":
-      return "Converted";
-    case "notinterested":
-    case "not interested":
-      return "Not Interested";
-    case "whatsapp":
-      return "WhatsApp";
-    default:
-      return "Called";
-  }
+const emptyAssignForm: AssignForm = {
+  name: "",
+  phone: "",
+  email: "",
+  source: "",
+};
+
+// The lead statuses, in the order they appear in every dropdown.
+const leadStages: LeadStage[] = [
+  "Called",
+  "Interested",
+  "Quotation Sent",
+  "Converted",
+  "Not Interested",
+  "WhatsApp",
+];
+
+// "Not Interested" -> "not-interested" (used for the coloured dot in the CSS)
+function stageClass(stage: LeadStage) {
+  return stage.toLowerCase().replace(/\s+/g, "-");
 }
 
+// How many leads are in each status.
+function countByStage(list: Lead[]) {
+  return {
+    total: list.length,
+    called: list.filter((lead) => lead.stage === "Called").length,
+    interested: list.filter((lead) => lead.stage === "Interested").length,
+    quotationSent: list.filter((lead) => lead.stage === "Quotation Sent").length,
+    converted: list.filter((lead) => lead.stage === "Converted").length,
+    notInterested: list.filter((lead) => lead.stage === "Not Interested").length,
+    whatsapp: list.filter((lead) => lead.stage === "WhatsApp").length,
+  };
+}
+
+function leadKpiItems(
+  counts: ReturnType<typeof countByStage>,
+  totalLabel: string
+) {
+  return [
+    { label: totalLabel, value: counts.total },
+    { label: "Called", value: counts.called },
+    { label: "Interested", value: counts.interested },
+    { label: "Converted", value: counts.converted },
+    { label: "Not Interested", value: counts.notInterested },
+    { label: "WhatsApp", value: counts.whatsapp },
+  ];
+}
+
+// KPI cards shown at the top of each cross-selling section (includes Quotation Sent).
+function crossSellKpiItems(list: Lead[]) {
+  const counts = countByStage(list);
+  return [
+    { label: "Total Leads", value: counts.total },
+    { label: "Called", value: counts.called },
+    { label: "WhatsApp", value: counts.whatsapp },
+    { label: "Interested", value: counts.interested },
+    { label: "Quotation Sent", value: counts.quotationSent },
+    { label: "Converted", value: counts.converted },
+    { label: "Not Interested", value: counts.notInterested },
+  ];
+}
+
+// "2026-10-30" -> "30 Oct 2026"
 function formatFollowUpDate(date: string) {
   if (!date) return "Not scheduled";
   return new Date(`${date}T00:00:00`).toLocaleDateString("en-IN", {
@@ -292,6 +374,29 @@ function formatNoteDateTime(iso: string) {
   });
 }
 
+// 45000 -> "₹45,000"
+function formatRupees(amount: number) {
+  return `₹${amount.toLocaleString("en-IN")}`;
+}
+
+// Today as "2026-11-04" (the format a date input uses).
+function todayIso() {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
+}
+
+// 1536000 -> "1.5 MB"
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// Biggest file a vendor can attach for now (files are kept in the browser).
+const MAX_ATTACHMENT_BYTES = 1.5 * 1024 * 1024;
+
 function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(() => loadSession() !== null);
   const [userRole, setUserRole] = useState<UserRole>(
@@ -309,26 +414,16 @@ function App() {
   const [selectedService, setSelectedService] = useState<Service | "All">("All");
   const [stageFilter, setStageFilter] = useState("All");
   const [leadSearch, setLeadSearch] = useState("");
-  const [dashboardVendor, setDashboardVendor] = useState("All");
+  // Lead filters: one set for the admin, one for the signed-in vendor.
+  const [adminFilters, setAdminFilters] = useState<LeadFilters>(emptyFilters);
+  const [vendorFilters, setVendorFilters] = useState<LeadFilters>(emptyFilters);
 
   // Leads, vendors and vendor logins are kept in React state (and saved in the
   // browser for now) so admin edits update every screen.
   const [leads, setLeads] = usePersistentState<Lead[]>(
-    "koc-crm-leads-v1",
+    "koc-crm-leads-v2",
     sampleLeads
   );
-  // Migrate old status spellings already saved in this browser.
-  useEffect(() => {
-    let needsMigration = false;
-    const normalizedLeads = leads.map((lead) => {
-      const stage = normalizeLeadStage(String(lead.stage));
-      if (stage !== lead.stage) needsMigration = true;
-      return stage === lead.stage ? lead : { ...lead, stage };
-    });
-
-    if (needsMigration) setLeads(normalizedLeads);
-  }, [leads, setLeads]);
-
   const [vendors, setVendors] = usePersistentState<Vendor[]>(
     "koc-crm-vendors-v1",
     sampleVendors
@@ -339,13 +434,40 @@ function App() {
 
   // "Add Vendor" form (admin only).
   const [showAddVendor, setShowAddVendor] = useState(false);
+
+  // Bulk upload pop-up (admin and vendor).
+  const [showBulkUpload, setShowBulkUpload] = useState(false);
   const [vendorForm, setVendorForm] = useState<VendorForm>(emptyVendorForm);
   const [vendorFormError, setVendorFormError] = useState("");
+
+  // Assigning leads to one vendor, from that vendor's profile (admin only).
+  const [showBulkAssign, setShowBulkAssign] = useState(false); // CSV upload locked to this vendor
+  const [showAssignOne, setShowAssignOne] = useState(false); // one lead, typed in
+  const [showPool, setShowPool] = useState(false); // pick from unassigned leads
+  const [assignForm, setAssignForm] = useState<AssignForm>(emptyAssignForm);
+  const [assignError, setAssignError] = useState("");
+  const [poolSelected, setPoolSelected] = useState<number[]>([]);
 
   // Lead Details drawer state.
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
   const [newNote, setNewNote] = useState("");
   const [showAllNotes, setShowAllNotes] = useState(false);
+  // What is typed in the quotation amount box.
+  const [quotationDraft, setQuotationDraft] = useState("");
+
+  // Admin Leads page: which cross-selling section is selected (null = all leads).
+  const [leadsDirection, setLeadsDirection] = useState<"koc" | "vendors" | null>(
+    null
+  );
+
+  // Vendor dashboard: which section is selected (null = all my leads).
+  const [vendorDirection, setVendorDirection] = useState<
+    "koc" | "vendors" | null
+  >(null);
+
+  // Quotation date box and attachment error message.
+  const [quotationDateDraft, setQuotationDateDraft] = useState(todayIso());
+  const [attachmentError, setAttachmentError] = useState("");
 
   // Admin note-editing state.
   const [editingNoteId, setEditingNoteId] = useState<number | null>(null);
@@ -473,20 +595,25 @@ function App() {
     return matchesSearch && matchesService;
   });
 
-  const dashboardLeads = leads.filter((lead) => {
-    const matchesSearch =
-      `${lead.name} ${lead.phone} ${lead.vendor} ${lead.service}`
-        .toLowerCase()
-        .includes(search.toLowerCase());
+  // Admin: every lead, narrowed by the filter bar and the search box.
+  const dashboardLeads = applyLeadFilters(leads, adminFilters).filter((lead) =>
+    `${lead.name} ${lead.phone} ${lead.email} ${lead.vendor} ${lead.service}`
+      .toLowerCase()
+      .includes(search.toLowerCase())
+  );
 
-    const matchesVendor =
-      dashboardVendor === "All" || lead.vendor === dashboardVendor;
-
-    return matchesSearch && matchesVendor;
-  });
+  const adminSources = Array.from(new Set(leads.map((lead) => lead.source))).sort();
 
   const vendorLeads = selectedVendor
     ? leads.filter((lead) => lead.vendor === selectedVendor.name)
+    : [];
+
+  // Leads nobody owns yet, for the service the open vendor offers.
+  const poolLeads = selectedVendor
+    ? leads.filter(
+        (lead) =>
+          lead.vendor === "Unassigned" && lead.service === selectedVendor.service
+      )
     : [];
 
   const loggedInVendor = vendors.find(
@@ -498,36 +625,58 @@ function App() {
     (lead) => lead.vendor === currentVendorName
   );
 
-  const filteredLoggedInVendorLeads = loggedInVendorLeads.filter((lead) => {
-    const matchesSearch =
-      `${lead.name} ${lead.phone} ${lead.source}`
-        .toLowerCase()
-        .includes(leadSearch.toLowerCase());
+  // Vendor: only their own leads, narrowed by the filter bar and search box.
+  const filteredLoggedInVendorLeads = applyLeadFilters(
+    loggedInVendorLeads,
+    vendorFilters
+  ).filter((lead) =>
+    `${lead.name} ${lead.phone} ${lead.source}`
+      .toLowerCase()
+      .includes(leadSearch.toLowerCase())
+  );
 
-    const matchesStage =
-      stageFilter === "All" || lead.stage === stageFilter;
+  const vendorSources = Array.from(
+    new Set(loggedInVendorLeads.map((lead) => lead.source))
+  ).sort();
 
-    return matchesSearch && matchesStage;
-  });
 
-  const vendorDashboardCounts = {
-    total: loggedInVendorLeads.length,
-    contacted: loggedInVendorLeads.filter(
-      (lead) => lead.stage === "Called"
-    ).length,
-    interested: loggedInVendorLeads.filter(
-      (lead) => lead.stage === "Interested"
-    ).length,
-    converted: loggedInVendorLeads.filter(
-      (lead) => lead.stage === "Converted"
-    ).length,
-    notInterested: loggedInVendorLeads.filter(
-      (lead) => lead.stage === "Not Interested"
-    ).length,
-    whatsapp: loggedInVendorLeads.filter(
-      (lead) => lead.stage === "WhatsApp"
-    ).length,
-  };
+  // Cross-selling directions. Old leads without "origin" count as King of Cards.
+  const isFromKoc = (lead: Lead) => lead.origin !== "Vendor";
+  const isFromVendor = (lead: Lead) => lead.origin === "Vendor";
+
+  // Admin view
+  const adminKocToVendors = leads.filter(
+    (lead) => isFromKoc(lead) && lead.vendor !== "Unassigned"
+  );
+  const adminVendorsToKoc = leads.filter(isFromVendor);
+
+  // Vendor view (only their own leads)
+  const vendorReceivedFromKoc = loggedInVendorLeads.filter(isFromKoc);
+  const vendorSentToKoc = loggedInVendorLeads.filter(isFromVendor);
+
+  // Leads page: the leads of the section the admin clicked (or all leads).
+  const sectionLeads =
+    leadsDirection === "koc"
+      ? adminKocToVendors
+      : leadsDirection === "vendors"
+        ? adminVendorsToKoc
+        : leads;
+  const sectionIds = new Set(sectionLeads.map((lead) => lead.id));
+  // Same filters and search as before, limited to the clicked section.
+  const leadsPageList = dashboardLeads.filter((lead) => sectionIds.has(lead.id));
+
+  // Vendor dashboard: the section the vendor clicked (or all their leads).
+  const vendorSectionLeads =
+    vendorDirection === "koc"
+      ? vendorReceivedFromKoc
+      : vendorDirection === "vendors"
+        ? vendorSentToKoc
+        : loggedInVendorLeads;
+  const vendorSectionIds = new Set(vendorSectionLeads.map((lead) => lead.id));
+  // Same filters and search as before, limited to the clicked section.
+  const vendorPageList = filteredLoggedInVendorLeads.filter((lead) =>
+    vendorSectionIds.has(lead.id)
+  );
 
   const filteredVendorLeads = vendorLeads.filter((lead) => {
     const matchesSearch =
@@ -549,15 +698,7 @@ function App() {
     { title: "Revenue / Commission", value: "₹22,19,000", description: "Commission ₹74,400", icon: "₹" },
   ];
 
-  const leadCounts = {
-    total: vendorLeads.length,
-    called:vendorLeads.filter((lead) => lead.stage === "Called").length,
-    interested: vendorLeads.filter((lead) => lead.stage === "Interested").length,
-    converted: vendorLeads.filter((lead) => lead.stage === "Converted").length,
-    notInterested: vendorLeads.filter((lead) => lead.stage === "Not Interested").length,
-    whatsapp: vendorLeads.filter((lead) => lead.stage === "WhatsApp").length,
-
-  };
+  const leadCounts = countByStage(vendorLeads);
 
   function openVendor(vendor: Vendor) {
     setSelectedVendor(vendor);
@@ -570,6 +711,11 @@ function App() {
 
   function openLead(lead: Lead) {
     setSelectedLeadId(lead.id);
+    setQuotationDraft(
+      lead.quotationAmount !== undefined ? String(lead.quotationAmount) : ""
+    );
+    setQuotationDateDraft(lead.quotationDate ?? todayIso());
+    setAttachmentError("");
     setNewNote("");
     setShowAllNotes(false);
     setEditingNoteId(null);
@@ -578,6 +724,7 @@ function App() {
 
   function closeLeadDrawer() {
     setSelectedLeadId(null);
+    setQuotationDraft("");
     setNewNote("");
     setShowAllNotes(false);
     setEditingNoteId(null);
@@ -596,7 +743,12 @@ function App() {
     setSearch("");
     setVendorSearch("");
     setSelectedService("All");
-    setDashboardVendor("All");
+    setAdminFilters(emptyFilters);
+    setVendorFilters(emptyFilters);
+    setShowBulkUpload(false);
+    setShowBulkAssign(false);
+    setShowAssignOne(false);
+    setShowPool(false);
   }
 
   /* ---------- Admin: add and remove vendors ---------- */
@@ -702,87 +854,364 @@ function App() {
       )
     );
 
-    if (dashboardVendor === vendor.name) setDashboardVendor("All");
+    if (adminFilters.vendor === vendor.name) {
+      setAdminFilters((current) => ({ ...current, vendor: "All" }));
+    }
     setSelectedVendor(null);
   }
 
-  /* ---------- Lead Details drawer: role-based permissions ---------- */
+  /* ---------- Bulk upload ---------- */
 
-  // Admin can edit every lead. A vendor can edit only leads assigned to
-  // the vendor account that is currently signed in.
-  function canCurrentUserEditLead(lead: Lead) {
+  // The first status every new lead gets. Your list of statuses has no "New",
+  // so uploaded leads start as "Called". Add a "New" status later if you want.
+  const NEW_LEAD_STAGE: LeadStage = "Called";
+
+  function todayLabel() {
+    const now = new Date();
+    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    return `${String(now.getDate()).padStart(2, "0")} ${months[now.getMonth()]} ${now.getFullYear()}`;
+  }
+
+  function importLeads(incoming: NewLeadInput[]) {
+    if (incoming.length === 0) return;
+
+    // A vendor can only add leads to their own account.
+    const byVendor = userRole === "Admin";
+    const date = todayLabel();
+
+    setLeads((current) => {
+      let nextId = current.reduce((highest, lead) => Math.max(highest, lead.id), 0) + 1;
+
+      const added: Lead[] = incoming.map((row) => ({
+        id: nextId++,
+        name: row.name,
+        email: row.email,
+        phone: row.phone,
+        service: row.service as Service,
+        stage: NEW_LEAD_STAGE,
+        source: row.source,
+        vendor: byVendor ? row.vendor : currentVendorName,
+        assignedDate: date,
+        followUp: "Not scheduled",
+        followUpDate: "",
+        followUpTime: "",
+        notes: [],
+        origin: byVendor ? "King of Cards" : "Vendor",
+      }));
+
+      return [...current, ...added];
+    });
+  }
+
+  function closeBulkModal() {
+    setShowBulkUpload(false);
+    setShowBulkAssign(false);
+  }
+
+  function renderBulkUploadModal() {
+    if (!showBulkUpload && !showBulkAssign) return null;
+
     return (
-      userRole === "Admin" ||
-      (userRole === "Vendor" && lead.vendor === currentVendorName)
+      <BulkUploadModal
+        mode={userRole}
+        services={services}
+        vendors={vendors}
+        existingLeads={leads}
+        currentVendor={
+          loggedInVendor
+            ? { name: loggedInVendor.name, service: loggedInVendor.service }
+            : undefined
+        }
+        lockedVendor={
+          showBulkAssign && selectedVendor
+            ? { name: selectedVendor.name, service: selectedVendor.service }
+            : undefined
+        }
+        onImport={importLeads}
+        onClose={closeBulkModal}
+      />
     );
   }
 
-  // Vendors can edit/delete only interaction notes they personally added.
-  // Admin can manage every note on every lead.
-  function canCurrentUserEditNote(note: LeadNote) {
-    if (userRole === "Admin") return true;
+  /* ---------- Admin: assign leads to the open vendor ---------- */
 
+  // Option 1: type in one lead. The same duplicate check as the bulk upload
+  // runs first (same phone or email + same service = already in the system).
+  function openAssignOne() {
+    if (userRole !== "Admin" || !selectedVendor) return;
+
+    setAssignForm(emptyAssignForm);
+    setAssignError("");
+    setShowAssignOne(true);
+  }
+
+  function closeAssignOne() {
+    setShowAssignOne(false);
+    setAssignForm(emptyAssignForm);
+    setAssignError("");
+  }
+
+  function updateAssignForm(patch: Partial<AssignForm>) {
+    setAssignForm((current) => ({ ...current, ...patch }));
+    setAssignError("");
+  }
+
+  function assignOneLead(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (userRole !== "Admin" || !selectedVendor) return;
+
+    const name = assignForm.name.trim();
+    if (!name) {
+      setAssignError("Please enter the customer name.");
+      return;
+    }
+
+    const [row] = checkRows(
+      [
+        {
+          line: 2,
+          name,
+          phone: assignForm.phone,
+          email: assignForm.email,
+          service: "",
+          source: assignForm.source.trim(),
+          vendor: "",
+        },
+      ],
+      {
+        services,
+        existing: leads,
+        vendors,
+        fixedVendor: {
+          name: selectedVendor.name,
+          service: selectedVendor.service,
+        },
+        assignment: "fixed",
+        revealHolder: true,
+      }
+    );
+
+    if (!canImport(row)) {
+      setAssignError(row.reason || "This lead cannot be added.");
+      return;
+    }
+
+    importLeads([
+      {
+        name: row.name,
+        email: row.email,
+        phone: row.phone,
+        service: row.service,
+        vendor: selectedVendor.name,
+        source: row.source || "Manual assignment",
+      },
+    ]);
+
+    closeAssignOne();
+  }
+
+  // Option 2: tick several unassigned leads and give them to this vendor.
+  function openPool() {
+    if (userRole !== "Admin" || !selectedVendor) return;
+
+    setPoolSelected([]);
+    setShowPool(true);
+  }
+
+  function closePool() {
+    setShowPool(false);
+    setPoolSelected([]);
+  }
+
+  function togglePoolLead(id: number) {
+    setPoolSelected((current) =>
+      current.includes(id)
+        ? current.filter((item) => item !== id)
+        : [...current, id]
+    );
+  }
+
+  function assignPoolLeads() {
+    if (userRole !== "Admin" || !selectedVendor || poolSelected.length === 0) {
+      return;
+    }
+
+    const date = todayLabel();
+    const vendorName = selectedVendor.name;
+
+    setLeads((current) =>
+      current.map((lead) =>
+        poolSelected.includes(lead.id) && lead.vendor === "Unassigned"
+          ? {
+              ...lead,
+              vendor: vendorName,
+              assignedDate: date,
+              origin: "King of Cards",
+            }
+          : lead
+      )
+    );
+
+    closePool();
+  }
+
+  /* ---------- Lead Details drawer: edits ---------- */
+
+  // The admin can edit every lead. A vendor can edit only the leads assigned
+  // to them, because the vendor is the one who calls the customer and
+  // handles the lead.
+  function canEditLead(lead: Lead | null) {
+    if (!lead) return false;
+    return userRole === "Admin" || lead.vendor === currentVendorName;
+  }
+
+  // Notes are signed with the writer's name.
+  const authorName = userRole === "Admin" ? "CRM Admin" : currentVendorName;
+
+  // The admin can change any note. A vendor can change only their own notes.
+  function canModifyNote(note: LeadNote) {
     return (
-      userRole === "Vendor" &&
-      selectedLead !== null &&
-      canCurrentUserEditLead(selectedLead) &&
-      note.addedBy === currentVendorName
+      canEditLead(selectedLead) &&
+      (userRole === "Admin" || note.addedBy === currentVendorName)
     );
   }
 
   function updateSelectedLead(patch: Partial<Lead>) {
-    if (!selectedLead || !canCurrentUserEditLead(selectedLead)) return;
+    if (!canEditLead(selectedLead) || selectedLeadId === null) return;
 
     setLeads((currentLeads) =>
       currentLeads.map((lead) =>
-        lead.id === selectedLead.id ? { ...lead, ...patch } : lead
+        lead.id === selectedLeadId ? { ...lead, ...patch } : lead
       )
     );
   }
 
   function changeLeadStage(stage: LeadStage) {
-    if (!selectedLead || !canCurrentUserEditLead(selectedLead)) return;
+    if (!selectedLead) return;
 
     updateSelectedLead({
       stage,
       followUp:
-        stage === "Called"
+        stage === "Converted"
           ? "Completed"
           : formatFollowUpDate(selectedLead.followUpDate),
     });
   }
 
-  // Follow-up scheduling remains Admin-only.
   function changeFollowUpDate(date: string) {
-    if (userRole !== "Admin" || !selectedLead) return;
+    if (!selectedLead) return;
 
     updateSelectedLead({
       followUpDate: date,
       followUp:
-        selectedLead.stage === "Called"
+        selectedLead.stage === "Converted"
           ? "Completed"
           : formatFollowUpDate(date),
     });
   }
 
-  function changeFollowUpTime(time: string) {
-    if (userRole !== "Admin" || !selectedLead) return;
-    updateSelectedLead({ followUpTime: time });
+  // Saves the typed amount on the lead. If the lead is still at an early
+  // stage, it also moves to "Quotation Sent" automatically.
+  function saveQuotation() {
+    if (!selectedLead || !canEditLead(selectedLead)) return;
+
+    const amount = Number(quotationDraft);
+    if (!quotationDraft.trim() || !Number.isFinite(amount) || amount <= 0) {
+      return;
+    }
+
+    const earlyStage =
+      selectedLead.stage === "Called" ||
+      selectedLead.stage === "Interested" ||
+      selectedLead.stage === "WhatsApp";
+
+    updateSelectedLead({
+      quotationAmount: amount,
+      quotationDate: quotationDateDraft || todayIso(),
+      quotationUpdatedAt: new Date().toISOString(),
+      ...(earlyStage
+        ? {
+            stage: "Quotation Sent" as LeadStage,
+            followUp: formatFollowUpDate(selectedLead.followUpDate),
+          }
+        : {}),
+    });
+  }
+
+  // Clears the quotation (the status is left as it is).
+  function clearQuotation() {
+    if (!selectedLead || !canEditLead(selectedLead)) return;
+    if (!window.confirm("Remove this quotation?")) return;
+
+    updateSelectedLead({
+      quotationAmount: undefined,
+      quotationDate: undefined,
+      quotationUpdatedAt: undefined,
+    });
+    setQuotationDraft("");
+    setQuotationDateDraft(todayIso());
+  }
+
+  // Reads each chosen file and attaches it to the open lead.
+  function addQuotationFiles(files: FileList | null) {
+    if (!files || !selectedLead || !canEditLead(selectedLead)) return;
+
+    const leadId = selectedLead.id;
+    setAttachmentError("");
+
+    Array.from(files).forEach((file) => {
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        setAttachmentError(`"${file.name}" is bigger than 1.5 MB.`);
+        return;
+      }
+
+      const reader = new FileReader();
+
+      reader.onload = () => {
+        const attachment: QuotationFile = {
+          id: Date.now() + Math.floor(Math.random() * 1000),
+          name: file.name,
+          type: file.type,
+          size: file.size,
+          dataUrl: String(reader.result),
+          addedBy: authorName,
+          addedAt: new Date().toISOString(),
+        };
+
+        setLeads((current) =>
+          current.map((lead) =>
+            lead.id === leadId
+              ? {
+                  ...lead,
+                  quotationFiles: [...(lead.quotationFiles ?? []), attachment],
+                }
+              : lead
+          )
+        );
+      };
+
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function removeQuotationFile(fileId: number) {
+    if (!selectedLead || !canEditLead(selectedLead)) return;
+    if (!window.confirm("Remove this attachment?")) return;
+
+    updateSelectedLead({
+      quotationFiles: (selectedLead.quotationFiles ?? []).filter(
+        (file) => file.id !== fileId
+      ),
+    });
   }
 
   function addLeadNote() {
-    if (
-      !selectedLead ||
-      !canCurrentUserEditLead(selectedLead) ||
-      !newNote.trim()
-    ) {
-      return;
-    }
+    if (!canEditLead(selectedLead) || !selectedLead || !newNote.trim()) return;
 
     const note: LeadNote = {
       id: Date.now(),
       text: newNote.trim(),
-      addedBy: userRole === "Admin" ? "CRM Admin" : currentVendorName,
+      addedBy: authorName,
       createdAt: new Date().toISOString(),
     };
 
@@ -794,21 +1223,21 @@ function App() {
   }
 
   function startEditingNote(note: LeadNote) {
-    if (!canCurrentUserEditNote(note)) return;
+    if (!canModifyNote(note)) return;
 
     setEditingNoteId(note.id);
     setEditingNoteText(note.text);
   }
 
   function saveEditedNote() {
-    if (!selectedLead || editingNoteId === null || !editingNoteText.trim()) {
+    if (
+      !canEditLead(selectedLead) ||
+      !selectedLead ||
+      editingNoteId === null ||
+      !editingNoteText.trim()
+    ) {
       return;
     }
-
-    const noteBeingEdited = selectedLead.notes.find(
-      (note) => note.id === editingNoteId
-    );
-    if (!noteBeingEdited || !canCurrentUserEditNote(noteBeingEdited)) return;
 
     updateSelectedLead({
       notes: selectedLead.notes.map((note) =>
@@ -827,12 +1256,8 @@ function App() {
   }
 
   function deleteLeadNote(noteId: number) {
-    if (!selectedLead) return;
-
-    const noteToDelete = selectedLead.notes.find(
-      (note) => note.id === noteId
-    );
-    if (!noteToDelete || !canCurrentUserEditNote(noteToDelete)) return;
+    const note = selectedLead?.notes.find((item) => item.id === noteId);
+    if (!selectedLead || !note || !canModifyNote(note)) return;
 
     const confirmed = window.confirm("Delete this interaction note?");
     if (!confirmed) return;
@@ -852,8 +1277,7 @@ function App() {
   function renderLeadDrawer() {
     if (!selectedLead) return null;
 
-    const isAdmin = userRole === "Admin";
-    const canEditLead = canCurrentUserEditLead(selectedLead);
+    const canEdit = canEditLead(selectedLead);
 
     // Newest note first.
     const sortedNotes = [...selectedLead.notes].sort(
@@ -887,7 +1311,7 @@ function App() {
               <h2 id="lead-drawer-title">{selectedLead.name}</h2>
               <p>
                 {selectedLead.service}
-                {!isAdmin && <span className="Editable-badge">Editable</span>}
+                {!canEdit && <span className="view-only-badge">View only</span>}
               </p>
             </div>
 
@@ -946,7 +1370,7 @@ function App() {
                   <small>Current Stage</small>
                   <strong>
                     <span
-                      className={`stage-badge ${selectedLead.stage.toLowerCase()}`}
+                      className={`stage-badge ${stageClass(selectedLead.stage)}`}
                     >
                       <span />
                       {selectedLead.stage}
@@ -964,17 +1388,16 @@ function App() {
                 <span>Lead Status</span>
                 <select
                   value={selectedLead.stage}
-                  disabled={!canEditLead}
+                  disabled={!canEdit}
                   onChange={(event) =>
                     changeLeadStage(event.target.value as LeadStage)
                   }
                 >
-                  <option value="Called">Called</option>
-                  <option value="Interested">Interested</option>
-                  <option value="Converted">Converted</option>
-                  <option value="Not Interested">Not Interested</option>
-                  <option value="WhatsApp">WhatsApp</option>
-
+                  {leadStages.map((stage) => (
+                    <option key={stage} value={stage}>
+                      {stage}
+                    </option>
+                  ))}
                 </select>
               </label>
 
@@ -984,7 +1407,7 @@ function App() {
                   <input
                     type="date"
                     value={selectedLead.followUpDate}
-                    disabled={!isAdmin}
+                    disabled={!canEdit}
                     onChange={(event) => changeFollowUpDate(event.target.value)}
                   />
                 </label>
@@ -994,8 +1417,10 @@ function App() {
                   <input
                     type="time"
                     value={selectedLead.followUpTime}
-                    disabled={!isAdmin}
-                    onChange={(event) => changeFollowUpTime(event.target.value)}
+                    disabled={!canEdit}
+                    onChange={(event) =>
+                      updateSelectedLead({ followUpTime: event.target.value })
+                    }
                   />
                 </label>
               </div>
@@ -1004,12 +1429,145 @@ function App() {
                 Next follow-up: <strong>{followUpSummary}</strong>
               </p>
 
-              {!isAdmin && (
+              {!canEdit && (
                 <p className="drawer-hint">
-                  You can update the status of your assigned leads and manage notes
-                  you added. Follow-up date and time are managed by Admin.
+                  Only the vendor this lead is assigned to, or an admin, can
+                  change it.
                 </p>
               )}
+            </section>
+
+            {/* Quotation */}
+            <section className="lead-detail-section">
+              <h3>Quotation</h3>
+
+              {selectedLead.quotationAmount !== undefined ? (
+                <p className="quotation-current">
+                  Current quotation:{" "}
+                  <strong>{formatRupees(selectedLead.quotationAmount)}</strong>
+                  {selectedLead.quotationUpdatedAt && (
+                    <span>
+                      {" "}
+                      · updated {formatNoteDateTime(selectedLead.quotationUpdatedAt)}
+                    </span>
+                  )}
+                  <br />
+                  Shared on:{" "}
+                  <strong>
+                    {selectedLead.quotationDate
+                      ? formatFollowUpDate(selectedLead.quotationDate)
+                      : "Not recorded"}
+                  </strong>
+                </p>
+              ) : (
+                <p className="drawer-hint">No quotation has been added yet.</p>
+              )}
+
+              {canEdit && (
+                <div className="quotation-row">
+                  <label className="drawer-field">
+                    <span>Quotation amount (₹)</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={quotationDraft}
+                      onChange={(event) => setQuotationDraft(event.target.value)}
+                      placeholder="e.g. 45000"
+                    />
+                  </label>
+
+                  <label className="drawer-field">
+                    <span>Date shared</span>
+                    <input
+                      type="date"
+                      value={quotationDateDraft}
+                      onChange={(event) => setQuotationDateDraft(event.target.value)}
+                    />
+                  </label>
+
+                  <button
+                    type="button"
+                    className="button-primary"
+                    disabled={
+                      !quotationDraft.trim() || Number(quotationDraft) <= 0
+                    }
+                    onClick={saveQuotation}
+                  >
+                    Save Quotation
+                  </button>
+
+                  {selectedLead.quotationAmount !== undefined && (
+                    <button
+                      type="button"
+                      className="button-secondary"
+                      onClick={clearQuotation}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Attachments: the vendor uploads the quotation file here */}
+              <div className="attachments">
+                <h4>Attachments</h4>
+
+                {(selectedLead.quotationFiles ?? []).length === 0 ? (
+                  <p className="drawer-hint">No files attached yet.</p>
+                ) : (
+                  <ul className="attachment-list">
+                    {(selectedLead.quotationFiles ?? []).map((file) => (
+                      <li key={file.id}>
+                        <div>
+                          <a
+                            className="attachment-name"
+                            href={file.dataUrl}
+                            download={file.name}
+                          >
+                            {file.name}
+                          </a>
+                          <span className="attachment-meta">
+                            {formatFileSize(file.size)} · {file.addedBy} ·{" "}
+                            {formatNoteDateTime(file.addedAt)}
+                          </span>
+                        </div>
+
+                        {canEdit && (
+                          <button
+                            type="button"
+                            className="note-delete"
+                            onClick={() => removeQuotationFile(file.id)}
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {canEdit && (
+                  <label className="attachment-upload">
+                    <span>+ Attach file</span>
+                    <input
+                      type="file"
+                      multiple
+                      accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"
+                      onChange={(event) => {
+                        addQuotationFiles(event.target.files);
+                        event.target.value = "";
+                      }}
+                    />
+                  </label>
+                )}
+
+                {attachmentError && (
+                  <div className="form-error" role="alert">
+                    {attachmentError}
+                  </div>
+                )}
+              </div>
             </section>
 
             {/* Interaction notes - always the last section */}
@@ -1026,7 +1584,7 @@ function App() {
                 Record calls, customer conversations, and follow-up outcomes.
               </p>
 
-              {canEditLead && (
+              {canEdit && (
                 <div className="note-composer">
                   <textarea
                     value={newNote}
@@ -1055,7 +1613,7 @@ function App() {
                   <div className="notes-list">
                     {visibleNotes.map((note) => (
                       <article className="note-card" key={note.id}>
-                        {editingNoteId === note.id && canCurrentUserEditNote(note) ? (
+                        {editingNoteId === note.id && canModifyNote(note) ? (
                           <div className="note-edit-area">
                             <textarea
                               value={editingNoteText}
@@ -1107,7 +1665,7 @@ function App() {
                           </span>
                         </div>
 
-                        {canCurrentUserEditNote(note) && editingNoteId !== note.id && (
+                        {canModifyNote(note) && editingNoteId !== note.id && (
                           <div className="note-admin-actions">
                             <button
                               type="button"
@@ -1156,6 +1714,151 @@ function App() {
           </footer>
         </aside>
       </div>
+    );
+  }
+
+  /* ---------- KPI strip + two clickable sections (vendor dashboard) ---------- */
+
+  function renderDirectionBlock(
+    list: Lead[],
+    active: "koc" | "vendors" | null,
+    onPick: (next: "koc" | "vendors" | null) => void,
+    kocLabel: string,
+    kocCount: number,
+    vendorsLabel: string,
+    vendorsCount: number
+  ) {
+    const counts = countByStage(list);
+    const kpis = [
+      { label: "Total", value: counts.total },
+      { label: "Pending", value: counts.called + counts.whatsapp },
+      { label: "Interested", value: counts.interested },
+      { label: "Quotation Sent", value: counts.quotationSent },
+      { label: "Converted", value: counts.converted },
+      { label: "Not Interested", value: counts.notInterested },
+    ];
+    const name =
+      active === "koc" ? kocLabel : active === "vendors" ? vendorsLabel : "All leads";
+
+    return (
+      <>
+        <div className="direction-kpis">
+          <span className="direction-kpis-label">{name}</span>
+          <div className="direction-kpi-row">
+            {kpis.map((item) => (
+              <div className="direction-kpi" key={item.label}>
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="direction-switch">
+          <button
+            type="button"
+            className={`direction-card ${active === "koc" ? "active" : ""}`}
+            onClick={() => onPick(active === "koc" ? null : "koc")}
+          >
+            <span className="direction-title">{kocLabel}</span>
+            <strong>{kocCount}</strong>
+          </button>
+
+          <button
+            type="button"
+            className={`direction-card ${active === "vendors" ? "active" : ""}`}
+            onClick={() => onPick(active === "vendors" ? null : "vendors")}
+          >
+            <span className="direction-title">{vendorsLabel}</span>
+            <strong>{vendorsCount}</strong>
+          </button>
+        </div>
+      </>
+    );
+  }
+
+  /* ---------- Cross-selling panel (used by admin and vendor) ---------- */
+
+  function renderCrossSellPanel(
+    title: string,
+    description: string,
+    list: Lead[],
+    emptyText: string,
+    vendorColumnLabel?: string // pass a label to show the Vendor column
+  ) {
+    const columns = vendorColumnLabel ? 7 : 6;
+
+    return (
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <div className="heading-with-count">
+              <h2>{title}</h2>
+              <span className="count-badge">
+                {list.length} {list.length === 1 ? "lead" : "leads"}
+              </span>
+            </div>
+            <p>{description}</p>
+          </div>
+        </div>
+
+        {/* Lead status KPIs for this section */}
+        <div className="crosssell-kpi-grid">
+          {crossSellKpiItems(list).map((item) => (
+            <article className="vendor-lead-kpi" key={item.label}>
+              <span>{item.label}</span>
+              <strong>{item.value}</strong>
+            </article>
+          ))}
+        </div>
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Customer</th>
+                <th>Phone</th>
+                <th>Service</th>
+                <th>Stage</th>
+                <th>Lead Source</th>
+                {vendorColumnLabel && <th>{vendorColumnLabel}</th>}
+                <th>Date</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {list.map((lead) => (
+                <tr
+                  key={lead.id}
+                  className="clickable-lead-row"
+                  onClick={() => openLead(lead)}
+                >
+                  <td><strong>{lead.name}</strong></td>
+                  <td>{lead.phone}</td>
+                  <td>{lead.service}</td>
+                  <td>
+                    <span className={`stage-badge ${stageClass(lead.stage)}`}>
+                      <span />
+                      {lead.stage}
+                    </span>
+                  </td>
+                  <td>{lead.source}</td>
+                  {vendorColumnLabel && <td>{lead.vendor}</td>}
+                  <td>{lead.assignedDate}</td>
+                </tr>
+              ))}
+
+              {list.length === 0 && (
+                <tr>
+                  <td colSpan={columns} className="empty-state">
+                    {emptyText}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
     );
   }
 
@@ -1319,22 +2022,12 @@ function App() {
           </div>
 
           <div className="vendor-lead-kpi-grid">
-            <article className="vendor-lead-kpi">
-              <span>Total Leads</span>
-              <strong>{leadCounts.total}</strong>
-            </article>
-            <article className="vendor-lead-kpi">
-              <span>Called</span>
-              <strong>{leadCounts.called}</strong>
-            </article>
-            <article className="vendor-lead-kpi">
-              <span>Interested</span>
-              <strong>{leadCounts.interested}</strong>
-            </article>
-            <article className="vendor-lead-kpi">
-              <span>Converted</span>
-              <strong>{leadCounts.converted}</strong>
-            </article>
+            {leadKpiItems(leadCounts, "Total Leads").map((item) => (
+              <article className="vendor-lead-kpi" key={item.label}>
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+              </article>
+            ))}
           </div>
         </div>
 
@@ -1343,6 +2036,22 @@ function App() {
             <div>
               <h2>Leads Assigned to {selectedVendor.name}</h2>
               <p>View customers assigned to this vendor.</p>
+            </div>
+
+            {/* Admin: give this vendor more leads, one by one or in bulk. */}
+            <div className="panel-actions">
+              <button className="button-secondary" onClick={openPool}>
+                Pick from Unassigned ({poolLeads.length})
+              </button>
+              <button
+                className="button-secondary"
+                onClick={() => setShowBulkAssign(true)}
+              >
+                ↑ Bulk Upload
+              </button>
+              <button className="button-primary" onClick={openAssignOne}>
+                + Assign Lead
+              </button>
             </div>
           </div>
 
@@ -1359,11 +2068,11 @@ function App() {
               onChange={(event) => setStageFilter(event.target.value)}
             >
               <option value="All">All stages</option>
-              <option value="Called">Called</option>
-              <option value="Interested">Interested</option>
-              <option value="Converted">Converted</option>
-              <option value="Not Interested">Not Interested</option>
-              <option value="WhatsApp">WhatsApp</option>
+              {leadStages.map((stage) => (
+                <option key={stage} value={stage}>
+                  {stage}
+                </option>
+              ))}
             </select>
           </div>
 
@@ -1392,7 +2101,7 @@ function App() {
                     <td>{lead.phone}</td>
                     <td>{lead.service}</td>
                     <td>
-                      <span className={`stage-badge ${lead.stage.toLowerCase()}`}>
+                      <span className={`stage-badge ${stageClass(lead.stage)}`}>
                         <span />
                         {lead.stage}
                       </span>
@@ -1553,6 +2262,380 @@ function App() {
     );
   }
 
+  /* ---------- Admin: "Assign Lead" pop-up (one lead) ---------- */
+
+  function renderAssignOneModal() {
+    if (!showAssignOne || !selectedVendor) return null;
+
+    return (
+      <div className="modal-backdrop" onClick={closeAssignOne}>
+        <section
+          className="confirm-modal vendor-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="assign-one-title"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <h2 id="assign-one-title">Assign Lead to {selectedVendor.name}</h2>
+
+          <p>
+            Service: {selectedVendor.service}. The phone number and email are
+            checked so the same customer is not given twice.
+          </p>
+
+          <form className="vendor-form" onSubmit={assignOneLead}>
+            <div className="form-grid">
+              <label className="form-field form-field-wide">
+                <span>Customer name *</span>
+                <input
+                  value={assignForm.name}
+                  onChange={(event) => updateAssignForm({ name: event.target.value })}
+                  placeholder="e.g. Asha Rao"
+                  autoFocus
+                />
+              </label>
+
+              <label className="form-field">
+                <span>Phone</span>
+                <input
+                  value={assignForm.phone}
+                  onChange={(event) => updateAssignForm({ phone: event.target.value })}
+                  placeholder="98450 12345"
+                />
+              </label>
+
+              <label className="form-field">
+                <span>Email</span>
+                <input
+                  type="email"
+                  value={assignForm.email}
+                  onChange={(event) => updateAssignForm({ email: event.target.value })}
+                  placeholder="name@example.com"
+                />
+              </label>
+
+              <label className="form-field form-field-wide">
+                <span>Lead source</span>
+                <input
+                  value={assignForm.source}
+                  onChange={(event) => updateAssignForm({ source: event.target.value })}
+                  placeholder="e.g. Wedding card order"
+                />
+              </label>
+            </div>
+
+            {assignError && (
+              <div className="form-error" role="alert">
+                {assignError}
+              </div>
+            )}
+
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="button-secondary"
+                onClick={closeAssignOne}
+              >
+                Cancel
+              </button>
+
+              <button type="submit" className="button-primary">
+                Assign Lead
+              </button>
+            </div>
+          </form>
+        </section>
+      </div>
+    );
+  }
+
+  /* ---------- Admin: "Pick from Unassigned" pop-up (many leads) ---------- */
+
+  function renderPoolModal() {
+    if (!showPool || !selectedVendor) return null;
+
+    const allSelected =
+      poolLeads.length > 0 && poolSelected.length === poolLeads.length;
+
+    return (
+      <div className="modal-backdrop" onClick={closePool}>
+        <section
+          className="confirm-modal bulk-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="pool-title"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <h2 id="pool-title">Unassigned {selectedVendor.service} leads</h2>
+
+          <p>Tick the leads you want to give to {selectedVendor.name}.</p>
+
+          {poolLeads.length === 0 ? (
+            <div className="notes-empty">
+              There are no unassigned {selectedVendor.service} leads right now.
+              Upload a file and choose "Leave unassigned", or use the bulk upload
+              here to add leads straight to {selectedVendor.name}.
+            </div>
+          ) : (
+            <div className="table-wrap bulk-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>
+                      <input
+                        type="checkbox"
+                        aria-label="Select all"
+                        checked={allSelected}
+                        onChange={(event) =>
+                          setPoolSelected(
+                            event.target.checked
+                              ? poolLeads.map((lead) => lead.id)
+                              : []
+                          )
+                        }
+                      />
+                    </th>
+                    <th>Name</th>
+                    <th>Phone</th>
+                    <th>Email</th>
+                    <th>Source</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {poolLeads.map((lead) => (
+                    <tr key={lead.id}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${lead.name}`}
+                          checked={poolSelected.includes(lead.id)}
+                          onChange={() => togglePoolLead(lead.id)}
+                        />
+                      </td>
+                      <td><strong>{lead.name}</strong></td>
+                      <td>{lead.phone}</td>
+                      <td>{lead.email}</td>
+                      <td>{lead.source}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div className="modal-actions">
+            <button className="button-secondary" onClick={closePool}>
+              Cancel
+            </button>
+
+            <button
+              className="button-primary"
+              disabled={poolSelected.length === 0}
+              onClick={assignPoolLeads}
+            >
+              {poolSelected.length > 0
+                ? `Assign ${poolSelected.length} lead${poolSelected.length === 1 ? "" : "s"}`
+                : "Assign leads"}
+            </button>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  /* ---------- Admin: lead filters and the Leads page ---------- */
+
+  function renderAdminFilterBar(
+    shown: number = dashboardLeads.length,
+    total: number = leads.length
+  ) {
+    return (
+      <LeadFilterBar
+        mode="Admin"
+        filters={adminFilters}
+        onChange={setAdminFilters}
+        onClear={() => setSearch("")}
+        searchActive={search.trim() !== ""}
+        services={services}
+        vendors={vendors}
+        sources={adminSources}
+        shown={shown}
+        total={total}
+      >
+        <input
+          type="search"
+          placeholder="Name, phone, email, vendor..."
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+        />
+      </LeadFilterBar>
+    );
+  }
+
+  // Downloads exactly the leads the filters are showing.
+  function exportFilteredLeads() {
+    downloadTextFile(
+      "leads-export.csv",
+      toCsv([
+        ["Name", "Phone", "Email", "Service", "Stage", "Source", "Vendor", "Assigned Date", "Follow-up"],
+        ...leadsPageList.map((lead) => [
+          lead.name, lead.phone, lead.email, lead.service, lead.stage,
+          lead.source, lead.vendor, lead.assignedDate, lead.followUp,
+        ]),
+      ])
+    );
+  }
+
+  function renderAdminLeadsPage() {
+    const sectionCounts = countByStage(sectionLeads);
+    const sectionKpis = [
+      { label: "Total", value: sectionCounts.total },
+      { label: "Pending", value: sectionCounts.called + sectionCounts.whatsapp },
+      { label: "Interested", value: sectionCounts.interested },
+      { label: "Quotation Sent", value: sectionCounts.quotationSent },
+      { label: "Converted", value: sectionCounts.converted },
+      { label: "Not Interested", value: sectionCounts.notInterested },
+    ];
+    const sectionName =
+      leadsDirection === "koc"
+        ? "King of Cards → Vendors"
+        : leadsDirection === "vendors"
+          ? "Vendors → King of Cards"
+          : "All leads";
+
+    return (
+      <>
+      {/* KPIs of the selected section, at the very top */}
+      <div className="direction-kpis">
+        <span className="direction-kpis-label">{sectionName}</span>
+        <div className="direction-kpi-row">
+          {sectionKpis.map((item) => (
+            <div className="direction-kpi" key={item.label}>
+              <span>{item.label}</span>
+              <strong>{item.value}</strong>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Two sections side by side. Click one to see its KPIs and leads. */}
+      <div className="direction-switch">
+        <button
+          type="button"
+          className={`direction-card ${leadsDirection === "koc" ? "active" : ""}`}
+          onClick={() =>
+            setLeadsDirection((current) => (current === "koc" ? null : "koc"))
+          }
+        >
+          <span className="direction-title">King of Cards → Vendors</span>
+          <strong>{adminKocToVendors.length}</strong>
+          <small>Leads you gave to vendors</small>
+        </button>
+
+        <button
+          type="button"
+          className={`direction-card ${leadsDirection === "vendors" ? "active" : ""}`}
+          onClick={() =>
+            setLeadsDirection((current) =>
+              current === "vendors" ? null : "vendors"
+            )
+          }
+        >
+          <span className="direction-title">Vendors → King of Cards</span>
+          <strong>{adminVendorsToKoc.length}</strong>
+          <small>Leads vendors brought to you</small>
+        </button>
+      </div>
+
+      <section className="panel leads-panel">
+        <div className="panel-heading">
+          <div>
+            <div className="heading-with-count">
+              <h2>{leadsDirection === null ? "All Leads" : sectionName}</h2>
+              <span className="count-badge">
+                {leadsPageList.length} of {sectionLeads.length} leads
+              </span>
+            </div>
+            <p>
+              {leadsDirection === null
+                ? "Click a section above to see only its leads and KPIs."
+                : "Click the selected section again to show all leads."}
+            </p>
+          </div>
+
+          <div className="panel-actions">
+            <button
+              className="button-secondary"
+              onClick={exportFilteredLeads}
+              disabled={leadsPageList.length === 0}
+            >
+              ↓ Export CSV
+            </button>
+            <button
+              className="button-secondary"
+              onClick={() => setShowBulkUpload(true)}
+            >
+              ↑ Bulk Upload
+            </button>
+          </div>
+        </div>
+
+        {renderAdminFilterBar(leadsPageList.length, sectionLeads.length)}
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Phone</th>
+                <th>Service</th>
+                <th>Stage</th>
+                <th>Lead Source</th>
+                <th>Vendor</th>
+                <th>Assigned Date</th>
+                <th>Follow-up</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {leadsPageList.map((lead) => (
+                <tr
+                  key={lead.id}
+                  className="clickable-lead-row"
+                  onClick={() => openLead(lead)}
+                >
+                  <td><strong>{lead.name}</strong></td>
+                  <td>{lead.phone}</td>
+                  <td>{lead.service}</td>
+                  <td>
+                    <span className={`stage-badge ${stageClass(lead.stage)}`}>
+                      <span />
+                      {lead.stage}
+                    </span>
+                  </td>
+                  <td>{lead.source}</td>
+                  <td>{lead.vendor}</td>
+                  <td>{lead.assignedDate}</td>
+                  <td>{lead.followUp}</td>
+                </tr>
+              ))}
+
+              {leadsPageList.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="empty-state">
+                    No leads match these filters.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      </>
+    );
+  }
+
   // Vendor dashboard: vendors do not see the Admin dashboard.
   if (userRole === "Vendor") {
     if (!loggedInVendor) {
@@ -1643,36 +2726,16 @@ function App() {
             </div>
           </header>
 
-          <section className="section-block">
-            <div className="section-heading">
-              <div>
-                <h2>My Performance</h2>
-                <p>Your assigned lead performance at a glance.</p>
-              </div>
-            </div>
-
-            <div className="vendor-lead-kpi-grid">
-              <article className="vendor-lead-kpi">
-                <span>Total Assigned Leads</span>
-                <strong>{vendorDashboardCounts.total}</strong>
-              </article>
-
-              <article className="vendor-lead-kpi">
-                <span>Called</span>
-                <strong>{vendorDashboardCounts.contacted}</strong>
-              </article>
-
-              <article className="vendor-lead-kpi">
-                <span>Interested</span>
-                <strong>{vendorDashboardCounts.interested}</strong>
-              </article>
-
-              <article className="vendor-lead-kpi">
-                <span>Converted</span>
-                <strong>{vendorDashboardCounts.converted}</strong>
-              </article>
-            </div>
-          </section>
+          {/* KPIs on top, then the two sections. Click one to see its leads. */}
+          {renderDirectionBlock(
+            vendorSectionLeads,
+            vendorDirection,
+            setVendorDirection,
+            "King of Cards → Me",
+            vendorReceivedFromKoc.length,
+            "Me → King of Cards",
+            vendorSentToKoc.length
+          )}
 
           <section className="panel vendor-leads-panel" id="my-vendor-leads">
             <div className="panel-heading">
@@ -1682,31 +2745,39 @@ function App() {
                   Customer enquiries assigned to {loggedInVendor.name}.
                 </p>
               </div>
-              <span className="vendor-total">
-                {loggedInVendorLeads.length} leads
-              </span>
+              <div className="vendor-heading-actions">
+                <span className="vendor-total">
+                  {loggedInVendorLeads.length} leads
+                </span>
+                <button
+                  className="button-secondary"
+                  onClick={() => setShowBulkUpload(true)}
+                >
+                  ↑ Upload My Leads
+                </button>
+              </div>
             </div>
 
-            <div className="lead-toolbar">
+            <LeadFilterBar
+              mode="Vendor"
+              filters={vendorFilters}
+              onChange={setVendorFilters}
+              onClear={() => setLeadSearch("")}
+              searchActive={leadSearch.trim() !== ""}
+              services={services}
+              vendors={vendors}
+              sources={vendorSources}
+              lockedService={loggedInVendor.service}
+              shown={vendorPageList.length}
+              total={vendorSectionLeads.length}
+            >
               <input
                 type="search"
-                placeholder="Search customer name or phone..."
+                placeholder="Name, phone or source..."
                 value={leadSearch}
                 onChange={(event) => setLeadSearch(event.target.value)}
               />
-
-              <select
-                value={stageFilter}
-                onChange={(event) => setStageFilter(event.target.value)}
-              >
-                <option value="All">All stages</option>
-                <option value="Called">Called</option>
-                <option value="Interested">Interested</option>
-                <option value="Converted">Converted</option>
-                <option value="Not Interested">Not Interested</option>
-                <option value="WhatsApp">WhatsApp</option>
-              </select>
-            </div>
+            </LeadFilterBar>
 
             <div className="table-wrap">
               <table>
@@ -1723,7 +2794,7 @@ function App() {
                 </thead>
 
                 <tbody>
-                  {filteredLoggedInVendorLeads.map((lead) => (
+                  {vendorPageList.map((lead) => (
                     <tr
                       key={lead.id}
                       className="clickable-lead-row"
@@ -1733,7 +2804,7 @@ function App() {
                       <td>{lead.phone}</td>
                       <td>{lead.service}</td>
                       <td>
-                        <span className={`stage-badge ${lead.stage.toLowerCase()}`}>
+                        <span className={`stage-badge ${stageClass(lead.stage)}`}>
                           <span />
                           {lead.stage}
                         </span>
@@ -1744,7 +2815,7 @@ function App() {
                     </tr>
                   ))}
 
-                  {filteredLoggedInVendorLeads.length === 0 && (
+                  {vendorPageList.length === 0 && (
                     <tr>
                       <td colSpan={7} className="empty-state">
                         No assigned leads found.
@@ -1756,12 +2827,12 @@ function App() {
             </div>
 
             <div className="table-footer">
-              Showing {filteredLoggedInVendorLeads.length} assigned leads
+              Showing {vendorPageList.length} assigned leads
               <button
                 className="text-button"
                 onClick={() => {
                   setLeadSearch("");
-                  setStageFilter("All");
+                  setVendorFilters(emptyFilters);
                 }}
               >
                 Clear filters
@@ -1808,6 +2879,8 @@ function App() {
         )}
 
         {renderLeadDrawer()}
+
+        {renderBulkUploadModal()}
       </div>
     );
   }
@@ -1902,7 +2975,7 @@ function App() {
                 <span className="nav-icon">{item.icon}</span>
                 <span>{item.name}</span>
                 {item.name === "Leads" && (
-                  <span className="nav-count">18</span>
+                  <span className="nav-count">{leads.length}</span>
                 )}
               </button>
             )
@@ -1994,8 +3067,17 @@ function App() {
                 <label className="filter-control">
                   <span>Vendor</span>
                   <select
-                    value={dashboardVendor}
-                    onChange={(event) => setDashboardVendor(event.target.value)}
+                    value={adminFilters.vendor}
+                    onChange={(event) => {
+                      const name = event.target.value;
+                      const picked = vendors.find((item) => item.name === name);
+                      setAdminFilters((current) => ({
+                        ...current,
+                        vendor: name,
+                        service: picked ? picked.service : current.service,
+                        assignment: "All",
+                      }));
+                    }}
                   >
                     <option value="All">All vendors</option>
                     {vendors.map((vendor) => (
@@ -2040,9 +3122,9 @@ function App() {
                 <div className="panel-actions">
                   <button
                     className="button-secondary"
-                    onClick={() => alert("CSV import will be implemented next.")}
+                    onClick={() => setShowBulkUpload(true)}
                   >
-                    ↑ Import CSV
+                    ↑ Bulk Upload
                   </button>
                   <button
                     className="button-primary"
@@ -2053,30 +3135,7 @@ function App() {
                 </div>
               </div>
 
-              <div className="lead-toolbar">
-                <select aria-label="Filter by service" defaultValue="all">
-                  <option value="all">All services</option>
-                  {services.map((service) => (
-                    <option key={service}>{service}</option>
-                  ))}
-                </select>
-
-                <select aria-label="Filter by stage" defaultValue="all">
-                  <option value="all">All status</option>
-                  <option>Called</option>
-                  <option>Interested</option>
-                  <option>Converted</option>
-                   <option>Not Interested</option>
-                    <option value="WhatsApp">WhatsApp</option>
-                </select>
-
-                <input
-                  type="search"
-                  placeholder="Search name, phone, vendor..."
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                />
-              </div>
+              {renderAdminFilterBar()}
 
               <div className="table-wrap">
                 <table>
@@ -2102,7 +3161,7 @@ function App() {
                         <td>{lead.phone}</td>
                         <td>{lead.service}</td>
                         <td>
-                          <span className={`stage-badge ${lead.stage.toLowerCase()}`}>
+                          <span className={`stage-badge ${stageClass(lead.stage)}`}>
                             <span />
                             {lead.stage}
                           </span>
@@ -2128,6 +3187,22 @@ function App() {
                 <span>Live lead data will be connected later.</span>
               </div>
             </section>
+
+            {renderCrossSellPanel(
+              "Leads from King of Cards → Vendors",
+              "Customers King of Cards has passed on to vendor partners.",
+              adminKocToVendors,
+              "No leads have been given to vendors yet.",
+              "Given to"
+            )}
+
+            {renderCrossSellPanel(
+              "Leads from Vendors → King of Cards",
+              "Customers vendors have brought in for King of Cards.",
+              adminVendorsToKoc,
+              "No vendor has uploaded leads yet.",
+              "Brought by"
+            )}
 
             <section className="bottom-grid">
               <article className="panel">
@@ -2202,7 +3277,24 @@ function App() {
           selectedVendor ? renderVendorProfile() : renderVendorDirectory()
         )}
 
-        {activePage !== "Home" && activePage !== "Vendors" && (
+        {activePage === "Reports" && (
+          <VendorPerformance
+            leads={leads}
+            vendors={vendors}
+            services={services}
+            onOpenVendor={(name) => {
+              const vendor = vendors.find((item) => item.name === name);
+              if (vendor) openVendor(vendor);
+            }}
+          />
+        )}
+
+        {activePage === "Leads" && renderAdminLeadsPage()}
+
+        {activePage !== "Home" &&
+          activePage !== "Vendors" &&
+          activePage !== "Reports" &&
+          activePage !== "Leads" && (
           <section className="panel placeholder-panel">
             <span className="placeholder-icon">♧</span>
             <h2>{activePage}</h2>
@@ -2257,6 +3349,12 @@ function App() {
       {renderLeadDrawer()}
 
       {renderAddVendorModal()}
+
+      {renderAssignOneModal()}
+
+      {renderPoolModal()}
+
+      {renderBulkUploadModal()}
     </div>
   );
 }

@@ -1908,3 +1908,226 @@ textarea:focus-visible {
     align-items: flex-start;
   }
 }
+/* Quotation */
+
+.stage-badge.quotation-sent > span {
+  background: #6fa8dc;
+}
+
+.quotation-current {
+  margin: 0 0 14px;
+  color: #c8c8d0;
+  font-size: 12px;
+}
+
+.quotation-current strong {
+  color: #e1c182;
+  font-size: 16px;
+}
+
+.quotation-current span {
+  color: #92929d;
+  font-size: 11px;
+}
+
+.quotation-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.quotation-row .drawer-field {
+  flex: 1 1 180px;
+}
+
+.quotation-row .button-primary:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+/* Leads page: two section cards + compact KPIs */
+
+/* Leads page: KPIs on top, two smaller section cards below */
+
+.direction-kpis {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin-bottom: 14px;
+  padding: 18px 20px;
+  border: 1px solid #343439;
+  border-radius: 12px;
+  background: #1b1b20;
+}
+
+.direction-kpis-label {
+  color: #d7b777;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+}
+
+.direction-kpi-row {
+  display: grid;
+  flex: 1;
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+  gap: 12px;
+}
+
+.direction-kpi {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid #3b3b40;
+  border-radius: 10px;
+  background: #222226;
+}
+
+.direction-kpi span {
+  color: #b9b9c2;
+  font-size: 13px;
+}
+
+.direction-kpi strong {
+  color: #e1c182;
+  font-size: 28px;
+  line-height: 1.1;
+}
+
+.direction-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+.direction-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border: 1px solid #343439;
+  border-radius: 9px;
+  background: #161619;
+  color: #f0f0f3;
+  text-align: left;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+
+.direction-card:hover {
+  border-color: #74603d;
+}
+
+.direction-card.active {
+  border-color: #d1ad6a;
+  background: #2b2419;
+  box-shadow: inset 3px 0 #c7a461;
+}
+
+.direction-title {
+  color: #e4e4e9;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.direction-card strong {
+  color: #e1c182;
+  font-size: 18px;
+}
+
+.direction-card small {
+  display: none;
+}
+
+@media (max-width: 600px) {
+  .direction-switch {
+    grid-template-columns: 1fr;
+  }
+}
+/* Quotation date + attachments */
+
+.quotation-row .drawer-field input[type="date"] {
+  min-width: 150px;
+}
+
+.attachments {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid #343439;
+}
+
+.attachments h4 {
+  margin: 0 0 12px;
+  color: #d4d4da;
+  font-size: 13px;
+}
+
+.attachment-list {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.attachment-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #39393f;
+  border-radius: 8px;
+  background: #1b1b20;
+}
+
+.attachment-name {
+  display: block;
+  overflow-wrap: anywhere;
+  color: #e1c182;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.attachment-name:hover {
+  text-decoration: underline;
+}
+
+.attachment-meta {
+  display: block;
+  margin-top: 4px;
+  color: #92929d;
+  font-size: 10px;
+}
+
+.attachment-list .note-delete {
+  flex-shrink: 0;
+  padding: 3px 0;
+  border: none;
+  background: transparent;
+  font-size: 11px;
+}
+
+.attachment-upload {
+  display: inline-block;
+  padding: 9px 14px;
+  border: 1px dashed #57472c;
+  border-radius: 8px;
+  background: #272116;
+  color: #e1c182;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.attachment-upload:hover {
+  background: #383020;
+}
+
+.attachment-upload input {
+  display: none;
+}
