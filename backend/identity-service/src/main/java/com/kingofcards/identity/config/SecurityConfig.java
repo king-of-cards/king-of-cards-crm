@@ -11,26 +11,41 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity
 public class SecurityConfig {
+    @Bean AccountStatusVerifier accountStatusVerifier(org.springframework.beans.factory.ObjectProvider<com.kingofcards.identity.repository.IdentityUserRepository> users) {
+        return new IdentityAccountStatusVerifier(users::getIfAvailable);
+    }
     @Bean
-    SecurityFilterChain identitySecurityFilterChain(HttpSecurity http) throws Exception {
+    SecurityFilterChain identitySecurityFilterChain(HttpSecurity http, org.springframework.core.env.Environment environment,AccountStatusVerifier verifier) throws Exception {
+        var converter = new JwtAuthenticationConverter();
+        converter.setJwtGrantedAuthoritiesConverter(new IdentityJwtAuthoritiesConverter());
         return http.csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-            .authorizeHttpRequests(auth -> auth
+            .authorizeHttpRequests(auth -> {
+                // Historical handlers are retained only in an explicit legacy fixture/profile.
+                if (environment.acceptsProfiles(org.springframework.core.env.Profiles.of("legacy-vendor-setup")))
+                    auth.requestMatchers("/auth/vendor-password-setup").permitAll();
+                else auth.requestMatchers("/auth/vendor-password-setup", "/admin/vendors/invitations").denyAll();
+                auth
                 .requestMatchers("/health", "/actuator/health", "/actuator/health/**",
-                    "/auth/login", "/auth/jwks").permitAll()
+                    "/auth/login", "/auth/jwks", "/auth/admin-password-setup").permitAll()
                 .requestMatchers("/auth/refresh", "/auth/logout").permitAll()
                 .requestMatchers("/auth/me").authenticated()
-                .anyRequest().authenticated())
+                .requestMatchers("/admin/vendors", "/admin/vendors/**").hasRole("CRM_ADMIN")
+                .requestMatchers("/admin/administrators", "/admin/administrators/**").hasRole("CRM_ADMIN")
+                .anyRequest().authenticated();
+            })
             .exceptionHandling(errors -> errors
                 .authenticationEntryPoint((request, response, exception) ->
                     writeProblem(response, 401, "Unauthorized", "Authentication is required."))
                 .accessDeniedHandler((request, response, exception) ->
                     writeProblem(response, 403, "Forbidden", "The request is not allowed.")))
-            .oauth2ResourceServer(resource -> resource.jwt(jwt -> {}))
+            .oauth2ResourceServer(resource -> resource.jwt(jwt -> jwt.jwtAuthenticationConverter(converter)))
+            .addFilterAfter(new AccountStatusFilter(verifier),org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter.class)
             .build();
     }
     private static void writeProblem(HttpServletResponse response, int status, String title, String detail)

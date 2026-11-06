@@ -20,6 +20,13 @@ management:
       probes:
         enabled: true
 identity:
+  bigquery:
+    enabled: ${IDENTITY_BIGQUERY_ENABLED:false}
+    production-mutations-enabled: ${IDENTITY_BIGQUERY_PRODUCTION_MUTATIONS_ENABLED:false}
+    verification-evidence: "${IDENTITY_BIGQUERY_VERIFICATION_EVIDENCE:}"
+    project-id: ${BIGQUERY_PROJECT_ID:king-of-cards-509610}
+    dataset: ${BIGQUERY_DATASET:shared_rds_data}
+    location: ${BIGQUERY_LOCATION:asia-south1}
   jwt:
     issuer: ${JWT_ISSUER}
     audience: ${JWT_AUDIENCE}

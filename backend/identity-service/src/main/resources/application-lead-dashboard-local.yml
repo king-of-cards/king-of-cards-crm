@@ -1,0 +1,27 @@
+server:
+  address: 127.0.0.1
+  port: 18081
+eureka:
+  client:
+    enabled: false
+spring:
+  cloud:
+    discovery:
+      enabled: false
+    service-registry:
+      auto-registration:
+        enabled: false
+identity:
+  bigquery:
+    enabled: false
+    production-mutations-enabled: false
+  jwt:
+    issuer: urn:koc:lead-dashboard-local
+    audience: koc-lead-dashboard-local
+    access-token-ttl: 15m
+  refresh:
+    token-ttl: 1h
+  cookie:
+    secure: false
+    same-site: Lax
+    allowed-origin: http://127.0.0.1:15173

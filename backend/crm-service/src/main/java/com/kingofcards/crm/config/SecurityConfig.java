@@ -8,6 +8,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -24,7 +25,7 @@ import org.springframework.security.web.SecurityFilterChain;
 @EnableMethodSecurity
 public class SecurityConfig {
     @Bean
-    SecurityFilterChain crmSecurityFilterChain(HttpSecurity http) throws Exception {
+    SecurityFilterChain crmSecurityFilterChain(HttpSecurity http,org.springframework.beans.factory.ObjectProvider<AccountStatusVerifier> verifiers) throws Exception {
         JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
         converter.setJwtGrantedAuthoritiesConverter(new JwtRoleAuthoritiesConverter());
         return http
@@ -32,11 +33,16 @@ public class SecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/health", "/actuator/health", "/actuator/health/**").permitAll()
+                .requestMatchers("/leads/import", "/leads/import/**").hasRole("CRM_ADMIN")
+                .requestMatchers(HttpMethod.POST, "/leads").hasAnyRole("CRM_ADMIN", "CRM_VENDOR")
+                .requestMatchers(HttpMethod.GET, "/leads", "/leads/*").hasAnyRole("CRM_ADMIN", "CRM_VENDOR")
+                .requestMatchers("/leads", "/leads/**").denyAll()
                 .anyRequest().authenticated())
             .exceptionHandling(errors -> errors
                 .authenticationEntryPoint(problemEntryPoint())
                 .accessDeniedHandler(problemDeniedHandler()))
             .oauth2ResourceServer(resource -> resource.jwt(jwt -> jwt.jwtAuthenticationConverter(converter)))
+            .addFilterAfter(new AccountStatusFilter(jwt->{var verifier=verifiers.getIfAvailable();if(verifier==null)throw com.kingofcards.crm.exception.LeadApiException.unavailable();verifier.verify(jwt);}),org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter.class)
             .build();
     }
 

@@ -1,0 +1,45 @@
+server:
+  address: 127.0.0.1
+  port: 18080
+eureka:
+  client:
+    enabled: false
+spring:
+  cloud:
+    discovery:
+      enabled: false
+    loadbalancer:
+      enabled: false
+    service-registry:
+      auto-registration:
+        enabled: false
+    gateway:
+      server:
+        webflux:
+          discovery:
+            locator:
+              enabled: false
+          globalcors:
+            cors-configurations:
+              '[/**]':
+                allowed-origins: http://127.0.0.1:15173
+                allowed-methods: GET,POST,PUT,PATCH,DELETE,OPTIONS
+                allowed-headers: Authorization,Content-Type,X-XSRF-TOKEN
+                allow-credentials: true
+          routes:
+            - id: identity-service
+              uri: http://127.0.0.1:18081
+              predicates:
+                - Path=/api/identity/**
+              filters:
+                - StripPrefix=2
+            - id: crm-service
+              uri: http://127.0.0.1:18082
+              predicates:
+                - Path=/api/crm/**
+              filters:
+                - StripPrefix=2
+gateway:
+  jwt:
+    issuer: urn:koc:lead-dashboard-local
+    audience: koc-lead-dashboard-local

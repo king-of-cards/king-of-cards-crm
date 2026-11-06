@@ -5,7 +5,6 @@ import java.util.UUID;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import com.kingofcards.identity.dto.AuthUserResponse;
 import com.kingofcards.identity.entity.IdentityUser;
 import com.kingofcards.identity.exception.InvalidRefreshTokenException;
@@ -30,7 +29,6 @@ public class AuthenticationService {
         this.dummyHash = passwordEncoder.encode(UUID.randomUUID().toString());
     }
 
-    @Transactional
     public LoginResult login(String email, String password) {
         String normalized = normalizeEmail(email);
         IdentityUser user = users.findByNormalizedEmail(normalized).orElse(null);
@@ -39,13 +37,13 @@ public class AuthenticationService {
         if (user == null || !user.isEnabled() || !passwordMatches) {
             throw new BadCredentialsException(INVALID_CREDENTIALS);
         }
-        var access = jwtTokens.issue(user);
         var refresh = refreshTokens.createSession(user);
+        // Never issue a JWT until authoritative session creation has committed.
+        var access = jwtTokens.issue(user);
         return new LoginResult(access.value(), access.expiresInSeconds(), userResponse(user),
             refresh.refreshToken(), refresh.csrfToken(), refresh.lifetime());
     }
 
-    @Transactional(noRollbackFor = {InvalidRefreshTokenException.class, RefreshTokenReuseException.class})
     public RefreshResult refresh(String refreshCookie, String csrfCookie, String csrfHeader) {
         if (refreshCookie == null || refreshCookie.isBlank()) throw new BadCredentialsException("Invalid refresh session");
         var rotated = refreshTokens.rotate(refreshCookie, csrfCookie, csrfHeader);
@@ -54,7 +52,6 @@ public class AuthenticationService {
             rotated.refreshToken(), rotated.csrfToken(), rotated.lifetime());
     }
 
-    @Transactional
     public void logout(String refreshCookie, String csrfCookie, String csrfHeader) {
         if (refreshCookie == null || refreshCookie.isBlank()) return;
         refreshTokens.revoke(refreshCookie, csrfCookie, csrfHeader);
@@ -77,8 +74,12 @@ public class AuthenticationService {
     }
 
     public record LoginResult(String accessToken, long expiresIn, AuthUserResponse user,
-                              String refreshToken, String csrfToken, java.time.Duration refreshLifetime) {}
+                              String refreshToken, String csrfToken, java.time.Duration refreshLifetime) {
+        @Override public String toString() { return "LoginResult[data=REDACTED]"; }
+    }
     public record RefreshResult(String accessToken, long expiresIn, AuthUserResponse user,
-                                String refreshToken, String csrfToken, java.time.Duration refreshLifetime) {}
+                                String refreshToken, String csrfToken, java.time.Duration refreshLifetime) {
+        @Override public String toString() { return "RefreshResult[data=REDACTED]"; }
+    }
     public record CurrentUser(UUID id, String email, java.util.List<String> roles) {}
 }

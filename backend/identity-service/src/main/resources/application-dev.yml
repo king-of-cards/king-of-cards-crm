@@ -1,14 +1,7 @@
-spring:
-  datasource:
-    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/koc_identity_dev
-    username: ${IDENTITY_DB_USERNAME}
-    password: ${IDENTITY_DB_PASSWORD}
-  jpa:
-    hibernate:
-      ddl-auto: validate
-    open-in-view: false
-  flyway:
-    enabled: true
+# BigQuery-only runtime. Historical Flyway SQL is retained, not executed.
+eureka:
+  instance:
+    prefer-ip-address: true
 identity:
   refresh:
     token-ttl: ${IDENTITY_REFRESH_TOKEN_TTL:7d}

@@ -21,7 +21,7 @@ import com.kingofcards.identity.dto.AuthUserResponse;
 import com.kingofcards.identity.service.AuthenticationService;
 
 @WebMvcTest(controllers = com.kingofcards.identity.controller.AuthController.class)
-@Import({SecurityConfig.class, AuthControllerTest.TestBeans.class,
+@Import({SecurityConfig.class, com.kingofcards.identity.config.TestAccountStatusConfiguration.class, AuthControllerTest.TestBeans.class,
          com.kingofcards.identity.exception.ApiExceptionHandler.class})
 class AuthControllerTest {
     @Autowired MockMvc mvc;
@@ -48,12 +48,34 @@ class AuthControllerTest {
     }
 
     @Test
+    void unverifiedSessionMutationReturns503WithoutTokensOrCookies() throws Exception {
+        when(authentication.login("blocked@example.test", "synthetic-password"))
+            .thenThrow(com.kingofcards.identity.exception.IdentityPersistenceException.gated());
+        mvc.perform(post("/auth/login").header("Origin", "http://localhost:5173")
+                .contentType("application/json")
+                .content("{\"email\":\"blocked@example.test\",\"password\":\"synthetic-password\"}"))
+            .andExpect(status().isServiceUnavailable())
+            .andExpect(jsonPath("$.code").value("IDENTITY_MUTATIONS_UNVERIFIED"))
+            .andExpect(jsonPath("$.accessToken").doesNotExist())
+            .andExpect(header().doesNotExist("Set-Cookie"));
+    }
+
+    @Test
     void rejectsInvalidEmailBeforeAuthentication() throws Exception {
         mvc.perform(post("/auth/login").header("Origin", "http://localhost:5173")
                 .contentType("application/json")
                 .content("{\"email\":\"invalid\",\"password\":\"synthetic-password\"}"))
             .andExpect(status().isBadRequest());
 
+    }
+
+    @Test void clientRoleCannotOverrideTheAuthoritativeLoginRole() throws Exception {
+        var user=new AuthUserResponse(UUID.randomUUID(),"vendor@example.test",List.of("CRM_VENDOR"));
+        when(authentication.login("vendor@example.test","synthetic-password"))
+            .thenReturn(new AuthenticationService.LoginResult("synthetic-token",900,user,"synthetic-refresh","synthetic-csrf",Duration.ofDays(7)));
+        mvc.perform(post("/auth/login").contentType("application/json")
+                .content("{\"email\":\"vendor@example.test\",\"password\":\"synthetic-password\",\"role\":\"CRM_ADMIN\"}"))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.user.roles[0]").value("CRM_VENDOR"));
     }
     @TestConfiguration
     static class TestBeans {

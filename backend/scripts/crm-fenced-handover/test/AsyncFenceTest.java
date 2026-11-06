@@ -1,0 +1,15 @@
+import java.nio.file.*;import java.net.*;import java.net.http.*;import java.time.*;import java.util.concurrent.*;import java.util.concurrent.atomic.*;
+import jakarta.servlet.*;import jakarta.servlet.http.*;import org.apache.catalina.*;import org.apache.catalina.startup.Tomcat;import org.apache.coyote.AbstractProtocol;import com.kingofcards.crm.ops.runtime.AdmissionValve;
+/** Async fixture only: demonstrates a completed HTTP worker is not a drained request. */
+class AsyncFenceTest {
+ static int count;static void check(boolean b,String name){if(!b)throw new AssertionError(name);count++;System.out.println("PASS "+name);}
+ public static void main(String[]a)throws Exception{
+  var tomcat=new Tomcat();tomcat.setBaseDir(Files.createTempDirectory(Path.of(a[0]),"async-tomcat-").toString());tomcat.setPort(0);Context context=tomcat.addContext("",Files.createTempDirectory(Path.of(a[0]),"async-context-").toString());var gate=new AdmissionValve();context.getPipeline().addValve(gate);var active=new AtomicReference<AsyncContext>();var entered=new CountDownLatch(1);
+  var servlet=Tomcat.addServlet(context,"fixture",new HttpServlet(){protected void doGet(HttpServletRequest req,HttpServletResponse res){AsyncContext ctx=req.startAsync();ctx.setTimeout(10000);active.set(ctx);entered.countDown();}});servlet.setAsyncSupported(true);context.addServletMappingDecoded("/*","fixture");
+  try{tomcat.start();URI uri=URI.create("http://127.0.0.1:"+tomcat.getConnector().getLocalPort()+"/async");var client=HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();var response=client.sendAsync(HttpRequest.newBuilder(uri).GET().build(),HttpResponse.BodyHandlers.ofString());check(entered.await(5,TimeUnit.SECONDS),"async request admitted in memory fixture");
+   Object executor=((AbstractProtocol<?>)tomcat.getConnector().getProtocolHandler()).getExecutor();long deadline=System.nanoTime()+5_000_000_000L;while((int)executor.getClass().getMethod("getActiveCount").invoke(executor)!=0&&System.nanoTime()<deadline)Thread.sleep(10);
+   check((int)executor.getClass().getMethod("getActiveCount").invoke(executor)==0&&!response.isDone()&&gate.active()==1,"async work remains counted after HTTP worker becomes idle");gate.closeAll();var denied=client.send(HttpRequest.newBuilder(uri).GET().build(),HttpResponse.BodyHandlers.ofString());check(denied.statusCode()==503&&gate.active()==1,"closing admission rejects new work without discarding original async count");
+   active.get().getResponse().getWriter().write("fixture completed");active.get().complete();check(response.get(5,TimeUnit.SECONDS).statusCode()==200,"admitted async response completes normally");deadline=System.nanoTime()+5_000_000_000L;while(gate.active()!=0&&System.nanoTime()<deadline)Thread.sleep(10);check(gate.active()==0,"only async completion releases the final drain count");System.out.println("PASS "+count+" async fence cases; no CRM, Eureka or BigQuery calls");
+  }finally{if(active.get()!=null)try{active.get().complete();}catch(IllegalStateException ignored){}tomcat.stop();tomcat.destroy();}
+ }
+}

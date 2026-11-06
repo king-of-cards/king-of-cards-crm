@@ -1,11 +1,7 @@
-spring:
-  datasource:
-    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/koc_crm_dev
-    username: ${CRM_DB_USERNAME}
-    password: ${CRM_DB_PASSWORD}
-  jpa:
-    hibernate:
-      ddl-auto: validate
-    open-in-view: false
-  flyway:
-    enabled: true
+# BigQuery-only CRM. Configuration is inherited from application.yml.
+# Historical SQL migration files are retained for reference and never executed.
+eureka:
+  instance:
+    # Netty DNS cannot resolve the Windows mshome.net hostname advertised locally.
+    # Register the reachable IP for local development; deployment profiles stay unchanged.
+    prefer-ip-address: true

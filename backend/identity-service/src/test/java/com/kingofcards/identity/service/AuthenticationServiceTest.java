@@ -47,6 +47,19 @@ class AuthenticationServiceTest {
     }
 
     @Test
+    void neverIssuesJwtWhenSessionCommitIsUnavailable() {
+        IdentityUser user = user(true);
+        when(users.findByNormalizedEmail("employee@example.com")).thenReturn(Optional.of(user));
+        when(encoder.matches("correct", "stored-hash")).thenReturn(true);
+        when(refreshTokens.createSession(user)).thenThrow(
+            new com.kingofcards.identity.exception.IdentityPersistenceException("IDENTITY_MUTATIONS_UNVERIFIED"));
+        assertThrows(com.kingofcards.identity.exception.IdentityPersistenceException.class,
+            () -> service.login("employee@example.com", "correct"));
+        verifyNoInteractions(jwtTokens);
+        verify(refreshTokens, times(1)).createSession(user);
+    }
+
+    @Test
     void rejectsUnknownUserWithGenericFailure() {
         when(users.findByNormalizedEmail("missing@example.com")).thenReturn(Optional.empty());
         when(encoder.matches("guess", "dummy-hash")).thenReturn(false);
@@ -67,7 +80,7 @@ class AuthenticationServiceTest {
 
     private static IdentityUser user(boolean enabled) {
         IdentityUser user = new IdentityUser("employee@example.com", "employee@example.com", "stored-hash", enabled);
-        user.addRole(new IdentityRole("CRM_AGENT", "CRM Agent"));
+        user.addRole(new IdentityRole("CRM_VENDOR", "Vendor"));
         return user;
     }
 }

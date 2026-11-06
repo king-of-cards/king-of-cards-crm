@@ -1,0 +1,18 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<launchConfiguration type="org.eclipse.jdt.launching.localJavaApplication">
+  <stringAttribute key="org.eclipse.jdt.launching.PROJECT_ATTR" value="01_gateway_service" />
+  <stringAttribute key="org.eclipse.jdt.launching.MAIN_TYPE" value="com.kingofcards.gateway.ApiGatewayApplication" />
+  <stringAttribute key="org.eclipse.jdt.launching.JRE_CONTAINER" value="org.eclipse.jdt.launching.JRE_CONTAINER/org.eclipse.jdt.internal.debug.ui.launcher.StandardVMType/JavaSE-21" />
+  <stringAttribute key="org.eclipse.jdt.launching.VM_ARGUMENTS" value="-Dspring.profiles.active=dev" />
+  <booleanAttribute key="org.eclipse.debug.core.appendEnvironmentVariables" value="true" />
+  <mapAttribute key="org.eclipse.debug.core.environmentVariables">
+    <mapEntry key="SERVER_PORT" value="8080" />
+    <mapEntry key="JWT_PUBLIC_KEY_LOCATION" value="C:\secure-credentials\king-of-cards-crm-dev-jwt\identity-dev-public.pem" />
+    <mapEntry key="JWT_ISSUER" value="http://localhost:8081" />
+    <mapEntry key="JWT_AUDIENCE" value="king-of-cards-crm" />
+    <mapEntry key="CORS_ALLOWED_ORIGIN" value="http://localhost:5173" />
+    <mapEntry key="EUREKA_DEFAULT_ZONE" value="http://localhost:8761/eureka/" />
+  </mapAttribute>
+  <stringAttribute key="org.eclipse.jdt.launching.WORKING_DIRECTORY" value="${workspace_loc:01_gateway_service}" />
+  <booleanAttribute key="org.eclipse.jdt.launching.DEFAULT_CLASSPATH" value="true" />
+</launchConfiguration>

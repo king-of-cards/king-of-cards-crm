@@ -10,28 +10,24 @@ import java.util.Base64;
 import java.util.HexFormat;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import com.kingofcards.identity.config.RefreshSettings;
 import com.kingofcards.identity.entity.IdentityUser;
 import com.kingofcards.identity.entity.RefreshTokenSession;
 import com.kingofcards.identity.exception.CsrfValidationException;
 import com.kingofcards.identity.exception.InvalidRefreshTokenException;
 import com.kingofcards.identity.exception.RefreshTokenReuseException;
-import com.kingofcards.identity.repository.IdentityUserRepository;
 import com.kingofcards.identity.repository.RefreshTokenSessionRepository;
 
 @Service
 public class RefreshTokenService {
     private static final SecureRandom RANDOM = new SecureRandom();
     private final RefreshTokenSessionRepository sessions;
-    private final IdentityUserRepository users;
     private final RefreshSettings settings;
     private final Clock clock;
 
-    public RefreshTokenService(RefreshTokenSessionRepository sessions, IdentityUserRepository users,
+    public RefreshTokenService(RefreshTokenSessionRepository sessions,
                                RefreshSettings settings, Clock clock) {
         this.sessions = sessions;
-        this.users = users;
         this.settings = settings;
         this.clock = clock;
         if (settings.tokenTtl() == null || settings.tokenTtl().isZero() || settings.tokenTtl().isNegative()) {
@@ -39,68 +35,43 @@ public class RefreshTokenService {
         }
     }
 
-    @Transactional
     public RefreshCredentials createSession(IdentityUser user) {
         Instant now = clock.instant();
         String refresh = randomToken();
         String csrf = randomToken();
         UUID familyId = UUID.randomUUID();
-        sessions.save(new RefreshTokenSession(user.getId(), familyId, sha256(refresh), sha256(csrf),
+        sessions.createForAuthenticatedUser(user, new RefreshTokenSession(user.getId(), familyId, sha256(refresh), sha256(csrf),
             now, now.plus(settings.tokenTtl())));
         return new RefreshCredentials(refresh, csrf, settings.tokenTtl());
     }
 
-    @Transactional(noRollbackFor = {InvalidRefreshTokenException.class, RefreshTokenReuseException.class})
     public RotatedCredentials rotate(String rawToken, String csrfCookie, String csrfHeader) {
         if (!validDoubleSubmit(csrfCookie, csrfHeader)) throw new CsrfValidationException();
+        if (rawToken == null || rawToken.isBlank()) throw new InvalidRefreshTokenException();
         Instant now = clock.instant();
-        RefreshTokenSession old = sessions.findByTokenHashForUpdate(sha256(rawToken))
-            .orElseThrow(InvalidRefreshTokenException::new);
-        if (!matchesHash(csrfCookie, old.getCsrfTokenHash())) throw new CsrfValidationException();
-
-        if (old.isConsumedOrRevoked()) {
-            sessions.revokeFamily(old.getTokenFamilyId(), now);
-            throw new RefreshTokenReuseException();
-        }
-        if (old.isExpiredAt(now)) {
-            sessions.revokeFamily(old.getTokenFamilyId(), now);
-            throw new InvalidRefreshTokenException();
-        }
-
-        IdentityUser user = users.findById(old.getUserId()).orElseThrow(InvalidRefreshTokenException::new);
-        if (!user.isEnabled()) {
-            sessions.revokeFamily(old.getTokenFamilyId(), now);
-            throw new InvalidRefreshTokenException();
-        }
-
-        old.consumeAt(now);
-        sessions.save(old);
         String nextRefresh = randomToken();
         String nextCsrf = randomToken();
-        sessions.save(new RefreshTokenSession(user.getId(), old.getTokenFamilyId(),
-            sha256(nextRefresh), sha256(nextCsrf), now, now.plus(settings.tokenTtl())));
-        return new RotatedCredentials(user, nextRefresh, nextCsrf, settings.tokenTtl());
+        var outcome = sessions.rotate(sha256(rawToken), sha256(csrfCookie), UUID.randomUUID(),
+            sha256(nextRefresh), sha256(nextCsrf), now, now.plus(settings.tokenTtl()));
+        switch (outcome.status()) {
+            case INVALID -> throw new InvalidRefreshTokenException();
+            case REUSED -> throw new RefreshTokenReuseException();
+            case CSRF_REJECTED -> throw new CsrfValidationException();
+            case SUCCESS -> { }
+        }
+        return new RotatedCredentials(outcome.user(), nextRefresh, nextCsrf, settings.tokenTtl());
     }
 
-    @Transactional(noRollbackFor = InvalidRefreshTokenException.class)
     public void revoke(String rawToken, String csrfCookie, String csrfHeader) {
         if (!validDoubleSubmit(csrfCookie, csrfHeader)) throw new CsrfValidationException();
-        Instant now = clock.instant();
-        RefreshTokenSession session = sessions.findByTokenHashForUpdate(sha256(rawToken))
-            .orElseThrow(InvalidRefreshTokenException::new);
-        if (!matchesHash(csrfCookie, session.getCsrfTokenHash())) throw new CsrfValidationException();
-        sessions.revokeFamily(session.getTokenFamilyId(), now);
+        if (rawToken == null || rawToken.isBlank()) throw new InvalidRefreshTokenException();
+        sessions.revoke(sha256(rawToken), sha256(csrfCookie), clock.instant());
     }
 
     private static boolean validDoubleSubmit(String cookie, String header) {
-        if (cookie == null || header == null) return false;
+        if (cookie == null || header == null || cookie.isBlank() || header.isBlank()) return false;
         return MessageDigest.isEqual(cookie.getBytes(StandardCharsets.UTF_8),
             header.getBytes(StandardCharsets.UTF_8));
-    }
-
-    private static boolean matchesHash(String raw, String expectedHash) {
-        return MessageDigest.isEqual(sha256(raw).getBytes(StandardCharsets.US_ASCII),
-            expectedHash.getBytes(StandardCharsets.US_ASCII));
     }
 
     private static String randomToken() {

@@ -32,6 +32,8 @@ public class JwtTokenService {
         Instant now = clock.instant();
         Instant expiresAt = now.plus(settings.accessTokenTtl());
         List<String> roles = user.getRoles().stream().map(role -> role.getCode()).sorted().toList();
+        if (roles.size()!=1 || !com.kingofcards.identity.entity.IdentityRole.SUPPORTED_CODES.contains(roles.getFirst()))
+            throw new IllegalStateException("Exactly one supported CRM role is required.");
         JwtClaimsSet claims = JwtClaimsSet.builder()
             .issuer(settings.issuer())
             .subject(user.getId().toString())
@@ -47,5 +49,7 @@ public class JwtTokenService {
         return new IssuedAccessToken(value, settings.accessTokenTtl().toSeconds());
     }
 
-    public record IssuedAccessToken(String value, long expiresInSeconds) {}
+    public record IssuedAccessToken(String value, long expiresInSeconds) {
+        @Override public String toString() { return "IssuedAccessToken[value=REDACTED, expiresInSeconds="+expiresInSeconds+"]"; }
+    }
 }

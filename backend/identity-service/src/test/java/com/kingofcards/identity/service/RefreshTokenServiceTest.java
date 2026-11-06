@@ -3,106 +3,98 @@ package com.kingofcards.identity.service;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.time.Clock;
-import java.time.Duration;
-import java.time.Instant;
-import java.time.ZoneOffset;
-import java.util.HexFormat;
-import java.util.Optional;
+import java.time.*;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
 import com.kingofcards.identity.config.RefreshSettings;
 import com.kingofcards.identity.entity.IdentityUser;
 import com.kingofcards.identity.entity.RefreshTokenSession;
-import com.kingofcards.identity.exception.CsrfValidationException;
-import com.kingofcards.identity.exception.InvalidRefreshTokenException;
-import com.kingofcards.identity.exception.RefreshTokenReuseException;
-import com.kingofcards.identity.repository.IdentityUserRepository;
+import com.kingofcards.identity.exception.*;
 import com.kingofcards.identity.repository.RefreshTokenSessionRepository;
+import com.kingofcards.identity.repository.RefreshTokenSessionRepository.*;
 
-@ExtendWith(MockitoExtension.class)
+/** Contract tests only, not a BigQuery concurrency proof. */
 class RefreshTokenServiceTest {
-    @Mock RefreshTokenSessionRepository sessions;
-    @Mock IdentityUserRepository users;
-    final Instant now = Instant.parse("2026-01-01T00:00:00Z");
+    RefreshTokenSessionRepository sessions;
     RefreshTokenService service;
-
-    @BeforeEach
-    void setUp() {
-        service = new RefreshTokenService(sessions, users, new RefreshSettings(Duration.ofDays(7)),
-            Clock.fixed(now, ZoneOffset.UTC));
+    final Instant now = Instant.parse("2026-01-01T00:00:00Z");
+    @BeforeEach void setup() {
+        sessions = mock(RefreshTokenSessionRepository.class);
+        service = new RefreshTokenService(sessions, new RefreshSettings(Duration.ofDays(7)), Clock.fixed(now, ZoneOffset.UTC));
     }
-
-    @Test
-    void createsOnlyTokenHashesInPersistence() {
-        IdentityUser user = new IdentityUser("a@example.com", "a@example.com", "bcrypt-hash", true);
+    @Test void persistsOnlyHashesAndReturnsCredentialsAfterStoreSuccess() {
+        var user = user();
         var issued = service.createSession(user);
-        ArgumentCaptor<RefreshTokenSession> saved = ArgumentCaptor.forClass(RefreshTokenSession.class);
-        verify(sessions).save(saved.capture());
+        var saved = ArgumentCaptor.forClass(RefreshTokenSession.class);
+        verify(sessions).createForAuthenticatedUser(eq(user), saved.capture());
         assertNotEquals(issued.refreshToken(), saved.getValue().getTokenHash());
         assertNotEquals(issued.csrfToken(), saved.getValue().getCsrfTokenHash());
-        assertEquals(Duration.ofDays(7), issued.lifetime());
+        assertEquals(64, saved.getValue().getTokenHash().length());
+        assertEquals(user.getId(), saved.getValue().getUserId());
+        assertEquals(now.plus(Duration.ofDays(7)), saved.getValue().getExpiresAt());
+        assertFalse(issued.toString().contains(issued.refreshToken()));
     }
-
-    @Test
-    void rotatesTokenAndRejectsReuseByRevokingItsFamily() {
-        String refresh = "original-refresh";
-        String csrf = "original-csrf";
-        UUID family = UUID.randomUUID();
-        IdentityUser user = new IdentityUser("a@example.com", "a@example.com", "hash", true);
-        RefreshTokenSession old = session(refresh, csrf, family, now.plusSeconds(500));
-        when(sessions.findByTokenHashForUpdate(hash(refresh))).thenReturn(Optional.of(old));
-        when(users.findById(old.getUserId())).thenReturn(Optional.of(user));
-
-        var next = service.rotate(refresh, csrf, csrf);
-        assertNotEquals(refresh, next.refreshToken());
-        assertNotEquals(csrf, next.csrfToken());
-        assertEquals(user, next.user());
-
-        when(sessions.findByTokenHashForUpdate(hash(refresh))).thenReturn(Optional.of(old));
-        assertThrows(RefreshTokenReuseException.class, () -> service.rotate(refresh, csrf, csrf));
-        verify(sessions).revokeFamily(family, now);
+    @Test void rotationUsesOneAtomicStoreCallWithHashedCredentials() {
+        var user = user();
+        when(sessions.rotate(anyString(), anyString(), any(), anyString(), anyString(), any(), any()))
+            .thenReturn(new Rotation(Status.SUCCESS, user));
+        var result = service.rotate("old-refresh", "csrf", "csrf");
+        assertEquals(user, result.user());
+        assertNotEquals("old-refresh", result.refreshToken());
+        assertNotEquals("csrf", result.csrfToken());
+        verify(sessions).rotate(matches("[a-f0-9]{64}"), matches("[a-f0-9]{64}"), any(UUID.class),
+            matches("[a-f0-9]{64}"), matches("[a-f0-9]{64}"), eq(now), eq(now.plus(Duration.ofDays(7))));
+        verifyNoMoreInteractions(sessions);
     }
-
-    @Test
-    void rejectsExpiredTokensAndMissingCsrf() {
-        String refresh = "expired-refresh";
-        String csrf = "expired-csrf";
-        UUID family = UUID.randomUUID();
-        RefreshTokenSession old = session(refresh, csrf, family, now.minusSeconds(1));
-        when(sessions.findByTokenHashForUpdate(hash(refresh))).thenReturn(Optional.of(old));
-        assertThrows(InvalidRefreshTokenException.class, () -> service.rotate(refresh, csrf, csrf));
-        verify(sessions).revokeFamily(family, now);
-        assertThrows(CsrfValidationException.class, () -> service.rotate(refresh, csrf, null));
+    @Test void mapsCommittedReuseRevocationTo401WithoutAnotherWrite() {
+        when(sessions.rotate(anyString(), anyString(), any(), anyString(), anyString(), any(), any()))
+            .thenReturn(new Rotation(Status.REUSED, null));
+        assertThrows(RefreshTokenReuseException.class, () -> service.rotate("old", "csrf", "csrf"));
+        verify(sessions, times(1)).rotate(anyString(), anyString(), any(), anyString(), anyString(), any(), any());
+        verifyNoMoreInteractions(sessions);
     }
-
-    @Test
-    void logoutRevokesTheRefreshFamily() {
-        String refresh = "logout-refresh";
-        String csrf = "logout-csrf";
-        UUID family = UUID.randomUUID();
-        when(sessions.findByTokenHashForUpdate(hash(refresh)))
-            .thenReturn(Optional.of(session(refresh, csrf, family, now.plusSeconds(500))));
-        service.revoke(refresh, csrf, csrf);
-        verify(sessions).revokeFamily(family, now);
+    @Test void mapsExpiredOrDisabledSessionToInvalidAuthentication() {
+        when(sessions.rotate(anyString(), anyString(), any(), anyString(), anyString(), any(), any()))
+            .thenReturn(new Rotation(Status.INVALID, null));
+        assertThrows(InvalidRefreshTokenException.class, () -> service.rotate("old", "csrf", "csrf"));
     }
-
-    private RefreshTokenSession session(String token, String csrf, UUID family, Instant expiry) {
-        IdentityUser user = new IdentityUser("a@example.com", "a@example.com", "hash", true);
-        return new RefreshTokenSession(user.getId(), family, hash(token), hash(csrf), now.minusSeconds(1), expiry);
+    @Test void rejectsMismatchedOrMissingDoubleSubmitBeforePersistence() {
+        assertThrows(CsrfValidationException.class, () -> service.rotate("old", "csrf", null));
+        assertThrows(CsrfValidationException.class, () -> service.rotate("old", "csrf", "different"));
+        assertThrows(CsrfValidationException.class, () -> service.revoke("old", "csrf", null));
+        verifyNoInteractions(sessions);
     }
-
-    private static String hash(String value) {
-        try {
-            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                .digest(value.getBytes(StandardCharsets.UTF_8)));
-        } catch (Exception e) { throw new IllegalStateException(e); }
+    @Test void rejectsStoredCsrfHashMismatch() {
+        when(sessions.rotate(anyString(), anyString(), any(), anyString(), anyString(), any(), any()))
+            .thenReturn(new Rotation(Status.CSRF_REJECTED, null));
+        assertThrows(CsrfValidationException.class, () -> service.rotate("old", "csrf", "csrf"));
     }
+    @Test void logoutDelegatesAtomicFamilyRevocationWithNoRawTokens() {
+        service.revoke("old", "csrf", "csrf");
+        verify(sessions).revoke(matches("[a-f0-9]{64}"), matches("[a-f0-9]{64}"), eq(now));
+        verifyNoMoreInteractions(sessions);
+    }
+    @Test void storageFailureNeverReturnsCredentialsOrRetries() {
+        doThrow(IdentityPersistenceException.gated()).when(sessions).createForAuthenticatedUser(any(), any());
+        assertThrows(IdentityPersistenceException.class, () -> service.createSession(user()));
+        verify(sessions, times(1)).createForAuthenticatedUser(any(), any());
+    }
+    @Test void malformedSuccessCannotAuthorizeDisabledOrMissingUser() {
+        assertThrows(IllegalArgumentException.class, () -> new Rotation(Status.SUCCESS, null));
+        var disabled = new IdentityUser("x@example.test", "x@example.test", "hash", false);
+        assertThrows(IllegalArgumentException.class, () -> new Rotation(Status.SUCCESS, disabled));
+    }
+    @Test void unknownCommitOutcomeIsPropagatedWithoutRetryingRotationOrLogout() {
+        when(sessions.rotate(anyString(), anyString(), any(), anyString(), anyString(), any(), any()))
+            .thenThrow(new IdentityPersistenceException("IDENTITY_COMMIT_OUTCOME_UNKNOWN"));
+        assertThrows(IdentityPersistenceException.class, () -> service.rotate("old", "csrf", "csrf"));
+        verify(sessions, times(1)).rotate(anyString(), anyString(), any(), anyString(), anyString(), any(), any());
+        doThrow(new IdentityPersistenceException("IDENTITY_COMMIT_OUTCOME_UNKNOWN"))
+            .when(sessions).revoke(anyString(), anyString(), any());
+        assertThrows(IdentityPersistenceException.class, () -> service.revoke("old", "csrf", "csrf"));
+        verify(sessions, times(1)).revoke(anyString(), anyString(), any());
+    }
+    private IdentityUser user() { return new IdentityUser("a@example.test", "a@example.test", "hash", true); }
 }

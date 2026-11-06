@@ -1,0 +1,14 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<launchConfiguration type="org.eclipse.jdt.launching.localJavaApplication">
+  <stringAttribute key="org.eclipse.jdt.launching.PROJECT_ATTR" value="02_eureka_service" />
+  <stringAttribute key="org.eclipse.jdt.launching.MAIN_TYPE" value="com.kingofcards.discovery.DiscoveryServerApplication" />
+  <stringAttribute key="org.eclipse.jdt.launching.JRE_CONTAINER" value="org.eclipse.jdt.launching.JRE_CONTAINER/org.eclipse.jdt.internal.debug.ui.launcher.StandardVMType/JavaSE-21" />
+  <stringAttribute key="org.eclipse.jdt.launching.VM_ARGUMENTS" value="-Dspring.profiles.active=dev" />
+  <stringAttribute key="org.eclipse.jdt.launching.PROGRAM_ARGUMENTS" value="--server.port=8761" />
+  <booleanAttribute key="org.eclipse.debug.core.appendEnvironmentVariables" value="true" />
+  <mapAttribute key="org.eclipse.debug.core.environmentVariables">
+    <mapEntry key="SERVER_PORT" value="8761" />
+  </mapAttribute>
+  <stringAttribute key="org.eclipse.jdt.launching.WORKING_DIRECTORY" value="${workspace_loc:02_eureka_service}" />
+  <booleanAttribute key="org.eclipse.jdt.launching.DEFAULT_CLASSPATH" value="true" />
+</launchConfiguration>

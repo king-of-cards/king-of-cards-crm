@@ -1,6 +1,10 @@
 server:
   port: 8082
 spring:
+  servlet:
+    multipart:
+      max-file-size: ${CRM_UPLOAD_MAX_FILE_SIZE:2MB}
+      max-request-size: ${CRM_UPLOAD_MAX_REQUEST_SIZE:3MB}
   application:
     name: crm-service
   mvc:
@@ -20,6 +24,29 @@ management:
       probes:
         enabled: true
 crm:
+  directional:
+    service-options: ${CRM_DIRECTIONAL_SERVICES:}
+    enabled: ${CRM_DIRECTIONAL_ENABLED:false}
+    writes-enabled: ${CRM_DIRECTIONAL_WRITES_ENABLED:false}
+    export-limit: ${CRM_DIRECTIONAL_EXPORT_LIMIT:10000}
+    import-limit: ${CRM_DIRECTIONAL_IMPORT_LIMIT:2000}
+    xlsx-time-zone: ${KOC_XLSX_TIME_ZONE:UTC}
+  lead-import:
+    max-rows: ${CRM_LEAD_IMPORT_MAX_ROWS:2000}
+    max-bytes: ${CRM_UPLOAD_MAX_FILE_SIZE_BYTES:2097152}
+  bigquery:
+    # Enable only after explicit approval of the additive DDL; disabled by default.
+    schema-auto-create: ${BIGQUERY_SCHEMA_AUTO_CREATE:false}
+    enabled: ${BIGQUERY_ENABLED:false}
+    project-id: ${BIGQUERY_PROJECT_ID:king-of-cards-509610}
+    dataset: ${BIGQUERY_DATASET:shared_rds_data}
+    location: ${BIGQUERY_LOCATION:asia-south1}
+    leads-table: ${BIGQUERY_LEADS_TABLE:crm_leads}
+    # Legacy compatibility setting; ignored. All BigQuery schemas are managed externally.
+    schema-init-enabled: ${BIGQUERY_SCHEMA_INIT_ENABLED:false}
+    writes-enabled: ${BIGQUERY_WRITES_ENABLED:false}
+    # Legacy dataset-only verifier flag; full startup validation always runs when enabled.
+    metadata-verification-enabled: ${BIGQUERY_METADATA_VERIFICATION_ENABLED:false}
   jwt:
     issuer: ${JWT_ISSUER}
     audience: ${JWT_AUDIENCE}

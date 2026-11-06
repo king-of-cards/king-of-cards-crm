@@ -1,0 +1,25 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<launchConfiguration type="org.eclipse.jdt.launching.localJavaApplication">
+  <stringAttribute key="org.eclipse.jdt.launching.PROJECT_ATTR" value="03_crm_service" />
+  <stringAttribute key="org.eclipse.jdt.launching.MAIN_TYPE" value="com.kingofcards.crm.CrmServiceApplication" />
+  <stringAttribute key="org.eclipse.jdt.launching.JRE_CONTAINER" value="org.eclipse.jdt.launching.JRE_CONTAINER/org.eclipse.jdt.internal.debug.ui.launcher.StandardVMType/JavaSE-21" />
+  <stringAttribute key="org.eclipse.jdt.launching.VM_ARGUMENTS" value="-Dspring.profiles.active=dev" />
+  <booleanAttribute key="org.eclipse.debug.core.appendEnvironmentVariables" value="true" />
+  <mapAttribute key="org.eclipse.debug.core.environmentVariables">
+    <mapEntry key="SERVER_PORT" value="8082" />
+    <mapEntry key="JWT_ISSUER" value="http://localhost:8081" />
+    <mapEntry key="JWT_AUDIENCE" value="king-of-cards-crm" />
+    <mapEntry key="JWT_JWKS_URI" value="http://localhost:8081/auth/jwks" />
+    <mapEntry key="BIGQUERY_ENABLED" value="true" />
+    <mapEntry key="BIGQUERY_WRITES_ENABLED" value="false" />
+    <mapEntry key="BIGQUERY_SCHEMA_INIT_ENABLED" value="false" />
+    <mapEntry key="EUREKA_DEFAULT_ZONE" value="http://localhost:8761/eureka/" />
+    <mapEntry key="GOOGLE_APPLICATION_CREDENTIALS" value="C:\secure-credentials\koc-card-game-user-key.json" />
+    <mapEntry key="BIGQUERY_PROJECT_ID" value="king-of-cards-509610" />
+    <mapEntry key="BIGQUERY_DATASET" value="shared_rds_data" />
+    <mapEntry key="BIGQUERY_LOCATION" value="asia-south1" />
+  </mapAttribute>
+  <stringAttribute key="org.eclipse.jdt.launching.PROGRAM_ARGUMENTS" value="--server.port=8082 --crm.bigquery.writes-enabled=false --crm.bigquery.schema-init-enabled=false" />
+  <stringAttribute key="org.eclipse.jdt.launching.WORKING_DIRECTORY" value="${workspace_loc:03_crm_service}" />
+  <booleanAttribute key="org.eclipse.jdt.launching.DEFAULT_CLASSPATH" value="true" />
+</launchConfiguration>

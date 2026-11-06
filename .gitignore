@@ -1,6 +1,9 @@
 # Java / Maven
 target/
 **/target/
+**/target-directional-verify/
+# Legacy Eclipse build outputs can contain copied POMs and .project files.
+/backend/*/bin/
 node_modules/
 **/node_modules/
 dist/
@@ -25,6 +28,21 @@ replay_pid*
 .env.*
 !.env.example
 
+# Google Cloud credentials and private key material (never commit real credentials)
+application_default_credentials.json
+*service-account*.json
+*service_account*.json
+*-credentials.json
+credentials.json
+credentials/
+.gcloud/
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+
 # IDEs
 .idea/
 *.iml
@@ -35,3 +53,8 @@ replay_pid*
 # OS
 .DS_Store
 Thumbs.db
+
+# Generated verification and diagnostic build outputs
+**/target-*/
+# Local runtime and recovery state
+backend/local-dev/

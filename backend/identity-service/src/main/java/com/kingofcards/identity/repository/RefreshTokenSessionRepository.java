@@ -1,23 +1,24 @@
 package com.kingofcards.identity.repository;
 
 import java.time.Instant;
-import java.util.Optional;
 import java.util.UUID;
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Lock;
-import org.springframework.data.jpa.repository.Modifying;
-import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.query.Param;
-import jakarta.persistence.LockModeType;
+import com.kingofcards.identity.entity.IdentityUser;
 import com.kingofcards.identity.entity.RefreshTokenSession;
 
-public interface RefreshTokenSessionRepository extends JpaRepository<RefreshTokenSession, UUID> {
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("select session from RefreshTokenSession session where session.tokenHash = :tokenHash")
-    Optional<RefreshTokenSession> findByTokenHashForUpdate(@Param("tokenHash") String tokenHash);
-
-    @Modifying
-    @Query("update RefreshTokenSession session set session.revokedAt = :now " +
-           "where session.tokenFamilyId = :familyId and session.revokedAt is null")
-    int revokeFamily(@Param("familyId") UUID familyId, @Param("now") Instant now);
+/** Whole security transitions, never independent read/update/insert calls.
+ * Implementations must return only after a known commit. Reuse/expiry revocation
+ * must commit before returning the denial status. No caller-side transaction.
+ */
+public interface RefreshTokenSessionRepository {
+    void createForAuthenticatedUser(IdentityUser expectedUser, RefreshTokenSession session);
+    Rotation rotate(String tokenHash, String csrfHash, UUID nextId, String nextTokenHash,
+                    String nextCsrfHash, Instant now, Instant nextExpiresAt);
+    void revoke(String tokenHash, String csrfHash, Instant now);
+    enum Status { SUCCESS, INVALID, REUSED, CSRF_REJECTED }
+    record Rotation(Status status, IdentityUser user) {
+        public Rotation {
+            if (status == null || (status == Status.SUCCESS && (user == null || !user.isEnabled())))
+                throw new IllegalArgumentException("Invalid committed refresh result.");
+        }
+    }
 }

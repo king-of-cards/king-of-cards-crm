@@ -16,7 +16,7 @@ import com.kingofcards.crm.config.SecurityConfig;
 import com.kingofcards.crm.controller.HealthController;
 
 @WebMvcTest(HealthController.class)
-@Import({SecurityConfig.class, HealthControllerTest.TestJwtConfiguration.class})
+@Import({SecurityConfig.class, com.kingofcards.crm.config.TestAccountStatusConfiguration.class, HealthControllerTest.TestJwtConfiguration.class})
 class HealthControllerTest {
     @Autowired MockMvc mvc;
     @Test

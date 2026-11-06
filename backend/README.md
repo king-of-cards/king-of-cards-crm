@@ -1,50 +1,54 @@
 # Backend development in STS
 
-## Import
+The canonical backend is this existing Maven multi-module project. Import
+`backend/pom.xml` and the four service modules into Spring Tool Suite; keep the
+backend here rather than moving it into the React folder. Use Java 21.
 
-1. In Spring Tool Suite, choose **File → Import → Maven → Existing Maven Projects**.
-2. Select `C:\crm\king-of-cards-crm-backend-worktree\backend` and import the parent `pom.xml`.
-3. Configure JDK 21 under **Window → Preferences → Java → Installed JREs**.
-4. Run `mvnw.cmd clean verify` from this `backend/` directory to build and test all four services.
+For the current Windows/STS launch process, saved configurations, service order,
+port checks and verified runtime status, follow
+[the local startup guide](docs/windows-local-startup.md). Historical build
+artifacts under `local-dev/` are evidence/logs, not active application sources.
 
-## Configure Identity and CRM launch configurations
+## Services
 
-Create Spring Boot launch configurations for `IdentityServiceApplication` and `CrmServiceApplication`. In each launch configuration, set the active profile to `dev` (or add `SPRING_PROFILES_ACTIVE=dev` under **Environment**).
+| Module | Port | Role |
+| --- | ---: | --- |
+| `discovery-server` | 8761 | Eureka registry |
+| `api-gateway` | 8080 | Frontend API gateway |
+| `identity-service` | 8081 | Authentication and identity APIs |
+| `crm-service` | 8082 | Lead and CRM APIs |
 
-Set these environment variables in the Identity launch configuration:
+Start only a service whose port is free. The canonical launcher checks ports and
+does not stop existing processes. Do not start a duplicate service instance.
 
-- `SPRING_PROFILES_ACTIVE=dev`
-- `POSTGRES_HOST=localhost`
-- `POSTGRES_PORT=5432`
-- `IDENTITY_DB_USERNAME=koc_identity_dev_app`
-- `IDENTITY_DB_PASSWORD` = the local password configured for that PostgreSQL role
+## Storage and local configuration
 
-Set these in the CRM launch configuration:
+**Google BigQuery is the only application database.** Identity and CRM use the
+existing BigQuery project, dataset, tables and records. PostgreSQL/JPA/Flyway
+configuration and SQL migration files still present in the repository are
+historical artifacts and are not part of the current runtime. Do not provide
+PostgreSQL credentials, start a PostgreSQL service, or run those migrations for
+this application.
 
-- `SPRING_PROFILES_ACTIVE=dev`
-- `POSTGRES_HOST=localhost`
-- `POSTGRES_PORT=5432`
-- `CRM_DB_USERNAME=koc_crm_dev_app`
-- `CRM_DB_PASSWORD` = the local password configured for that PostgreSQL role
+BigQuery project/dataset/location and external credential references are
+validated by the launch configurations. Credential files stay outside the
+repository. Keep Identity production mutations, CRM writes, directional writes
+and schema initialization disabled unless the separate operation has been
+explicitly approved. Read-only startup validation does not imply write approval.
 
-Enter passwords only in the local STS launch environment. Do not put them in source files, logs, or Git. `.env.example` contains blank password values; Spring Boot does not load `.env` automatically.
+The exact local environment, health URLs and security configuration are in
+[the Windows/STS startup guide](docs/windows-local-startup.md). BigQuery schema
+and cutover boundaries are described in [the cutover gates](docs/backend-bigquery-cutover-gates.md)
+and [the directional lead dashboard guide](docs/directional-leads-dashboard.md).
 
-## Start order
+## Build and verify
 
-Run these four Spring Boot applications in separate STS launch sessions, in order:
+From this directory, the Maven wrapper can build the existing backend modules:
 
-1. `DiscoveryServerApplication` — port 8761
-2. `IdentityServiceApplication` — port 8081, active profile `dev`
-3. `CrmServiceApplication` — port 8082, active profile `dev`
-4. `ApiGatewayApplication` — port 8080
+```powershell
+.\mvnw.cmd -o -B verify
+```
 
-Identity and CRM run Flyway against their respective DEV database at startup. Their current baseline migrations execute `SELECT 1` only; Hibernate uses `ddl-auto: validate`. No business tables are created.
-
-## Verify
-
-- Eureka dashboard: `http://localhost:8761`
-- Direct service health: `http://localhost:8081/health` and `http://localhost:8082/health`
-- Database-aware health: `http://localhost:8081/actuator/health` and `http://localhost:8082/actuator/health` should report `UP` when datasource connections and Flyway initialization succeed.
-- Through the gateway: `http://localhost:8080/api/identity/health` and `http://localhost:8080/api/crm/health`
-
-To check PostgreSQL connectivity independently, see `../infra/postgres/README.md`. The DEV datasource settings are in each service's `src/main/resources/application-dev.yml`; base `application.yml` retains service ports, names, and Eureka configuration. Production datasource configuration is intentionally absent until production details are provided.
+Use the full startup guide before launching or changing a running service. For
+the existing React/Vite application and browser-facing local checks, see
+[`../frontend/LOCAL-FRONTEND-TESTING.md`](../frontend/LOCAL-FRONTEND-TESTING.md).

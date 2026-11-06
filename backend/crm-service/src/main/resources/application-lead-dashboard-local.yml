@@ -1,0 +1,29 @@
+server:
+  address: 127.0.0.1
+  port: 18082
+eureka:
+  client:
+    enabled: false
+spring:
+  cloud:
+    discovery:
+      enabled: false
+    loadbalancer:
+      enabled: false
+    service-registry:
+      auto-registration:
+        enabled: false
+crm:
+  jwt:
+    issuer: urn:koc:lead-dashboard-local
+    audience: koc-lead-dashboard-local
+    jwk-set-uri: http://127.0.0.1:18081/auth/jwks
+  identity:
+    base-url: http://127.0.0.1:18081
+  directional:
+    enabled: true
+    writes-enabled: false
+  bigquery:
+    enabled: false
+    writes-enabled: false
+    schema-init-enabled: false

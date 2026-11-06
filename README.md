@@ -1,43 +1,57 @@
-# King of Cards — Cross-Selling CRM Beta
+# King of Cards Cross-Selling CRM
 
-Backend foundation for a development beta of the cross-selling CRM. The first milestone contains service infrastructure only; customer, lead, referral, coupon, commission, and dashboard business workflows are planned but not implemented. Use synthetic data only.
+This repository contains the existing Spring Boot microservices and React/Vite
+frontend for the King of Cards CRM. Continue development in this project; the
+backend remains a Maven multi-module project for Spring Tool Suite (STS), and
+the frontend remains an independent React application for VS Code.
 
-## Requirements
+## Technology and data
 
-- Java 21
-- Maven 3.9.x
-- PostgreSQL 15 or newer
+- Java 21, Spring Boot, Spring Cloud Gateway, Netflix Eureka, Spring Security
+  and JWT
+- React and Vite
+- **Google BigQuery is the only application database.** Identity and CRM use
+  the existing BigQuery project, dataset and tables. Do not add PostgreSQL,
+  MySQL or another runtime database, and do not replace or recreate existing
+  BigQuery resources.
+- BigQuery writes and schema changes are separately gated. Keep the committed
+  defaults disabled; use the current local startup guide for approved read-only
+  checks and test modes.
 
-## Backend services
+Legacy SQL/JPA/Flyway files and PostgreSQL setup notes are retained historical
+artifacts. They do not define the current application storage architecture and
+must not be used to start or migrate the application.
+
+## Existing services
 
 | Service | Port | Purpose |
 | --- | ---: | --- |
-| Discovery Server | 8761 | Eureka registry and dashboard at `http://localhost:8761` |
-| API Gateway | 8080 | Discovery-aware routes and React development CORS |
-| Identity Service | 8081 | Security/JWT foundation and health endpoint |
-| CRM Service | 8082 | JPA, Flyway, OpenFeign foundation and health endpoint |
-| React Frontend | 5173 | Vite development server; developed independently in VS Code |
+| Discovery Server | 8761 | Eureka registry |
+| API Gateway | 8080 | Routes frontend API requests to services |
+| Identity Service | 8081 | Authentication, JWT and account APIs |
+| CRM Service | 8082 | CRM and lead APIs; BigQuery-backed storage |
+| React Frontend | 5173 | Existing Vite application |
 
-Gateway prefixes `/api/identity/**` and `/api/crm/**` are stripped and forwarded to the corresponding service. Each service can also be reached directly on its local port.
+Gateway paths `/api/identity/**` and `/api/crm/**` route to their existing
+services. The frontend uses the Gateway at `http://localhost:8080`.
 
-## Local backend setup
+## Development
 
-The local PostgreSQL DEV databases are `koc_identity_dev` and `koc_crm_dev`. Configure their local credentials as environment variables; details are in [the PostgreSQL DEV setup notes](infra/postgres/README.md). For Spring Tool Suite import, the active `dev` profile, environment variable names, startup order, and health URLs, see [the backend development guide](backend/README.md).
+Keep the backend under `backend/` and import its existing Maven modules into
+STS. Use JDK 21 and the saved launch configurations. Startup order, environment
+settings, occupied-port checks and safe verification steps are documented in
+[the Windows/STS startup guide](backend/docs/windows-local-startup.md).
 
-The Maven Wrapper is included. From `C:\crm\king-of-cards-crm-backend-worktree\backend`, run:
+Open `frontend/` separately in VS Code. Its local testing instructions are in
+[the frontend guide](frontend/LOCAL-FRONTEND-TESTING.md). If Vite is already
+serving port 5173, reuse that instance rather than starting another.
 
-```powershell
-.\mvnw.cmd clean verify
-```
+The current frontend/backend contracts and feature boundaries are documented in
+[the directional lead dashboard guide](backend/docs/directional-leads-dashboard.md),
+[the CRM lead API guide](backend/docs/crm-lead-api.md), and
+[the frontend integration guide](frontend/LATEST-INTEGRATION.md).
 
-## Frontend (Visual Studio Code)
-
-Open `C:\crm\king-of-cards-crm\frontend` as a separate VS Code folder. Follow [the frontend README](frontend/README.md) to install dependencies and start Vite. The frontend reads `VITE_API_BASE_URL` from `frontend/.env` and defaults to `http://localhost:8080`. Its Service status page calls the existing Identity and CRM health routes through the gateway.
-
-## Spring Tool Suite (STS)
-
-Import `C:\crm\king-of-cards-crm-backend-worktree\backend` using **File → Import → Maven → Existing Maven Projects**, select Java 21, and follow [the backend STS guide](backend/README.md) for DEV environment variables, profiles, and service launch order.
-
-## Planned beta modules
-
-See [the planned beta module notes](docs/planned-beta-modules.md). These modules are documentation only in this foundation milestone.
+Do not start account bootstrap, enable authentication mutations, clean existing
+Identity records, run DDL/DML, or provision real accounts without the separate
+approval and safeguards described in the production authentication and
+BigQuery cutover documents.

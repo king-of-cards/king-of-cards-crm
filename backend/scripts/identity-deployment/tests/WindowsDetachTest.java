@@ -1,0 +1,13 @@
+import java.nio.file.*;import java.util.*;import java.util.concurrent.*;import java.util.jar.*;
+public class WindowsDetachTest {
+    static void waitFile(Path p)throws Exception{long end=System.nanoTime()+10_000_000_000L;while(!Files.exists(p)){if(System.nanoTime()>end)throw new AssertionError("Fixture timeout; preserve diagnostic processes: "+p);Thread.sleep(25);}}
+    public static void main(String[]args)throws Exception{Path root=Files.createTempDirectory(Path.of(args[0]),"detach-");Path classes=Path.of(args[1]);String java=Path.of(System.getProperty("java.home"),"bin","java.exe").toString();String cp=classes.toString();Path agent=root.resolve("fixture-agent.jar");var manifest=new Manifest();manifest.getMainAttributes().putValue("Manifest-Version","1.0");manifest.getMainAttributes().putValue("Agent-Class","DetachFixtureAgent");try(var out=new JarOutputStream(Files.newOutputStream(agent,StandardOpenOption.CREATE_NEW),manifest)){out.putNextEntry(new JarEntry("DetachFixtureAgent.class"));out.write(Files.readAllBytes(classes.resolve("DetachFixtureAgent.class")));out.closeEntry();}
+        Process child=new ProcessBuilder(java,"-cp",cp,"DetachFixtureChild",root.toString()).redirectOutput(root.resolve("child.out.log").toFile()).redirectError(root.resolve("child.err.log").toFile()).start();waitFile(root.resolve("ready.marker"));
+        Process caller=new ProcessBuilder(java,"-cp",cp,"DetachFixtureCli",Long.toString(child.pid()),agent.toString(),root.toString()).redirectOutput(root.resolve("caller.out.log").toFile()).redirectError(root.resolve("caller.err.log").toFile()).start();waitFile(root.resolve("detached.properties"));
+        if(!caller.isAlive())throw new AssertionError("Fixture caller did not stay alive for negative case");Files.writeString(root.resolve("first.stop-request"),"negative",StandardOpenOption.CREATE_NEW);waitFile(root.resolve("refused.marker"));if(!child.isAlive())throw new AssertionError("Stopped while caller alive");
+        Files.writeString(root.resolve("release-caller.marker"),"release only fixture caller",StandardOpenOption.CREATE_NEW);
+        if(!caller.waitFor(8,TimeUnit.SECONDS)||caller.exitValue()!=0)throw new AssertionError("Detach caller failed; preserve fixture, no force-kill");Files.writeString(root.resolve("second.stop-request"),"after detach and caller exit",StandardOpenOption.CREATE_NEW);
+        if(!child.waitFor(8,TimeUnit.SECONDS)||child.exitValue()!=0||!Files.exists(root.resolve("graceful.marker")))throw new AssertionError("Graceful fixture shutdown failed; no force-kill");
+        System.out.println("WINDOWS_DETACH_HANDSHAKE_PASS checks=5; fixture PID="+child.pid()+", caller PID="+caller.pid()+"; existing services untouched");
+    }
+}

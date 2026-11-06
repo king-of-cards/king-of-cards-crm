@@ -9,6 +9,14 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
+    @ExceptionHandler(IdentityPersistenceException.class)
+    ProblemDetail persistenceUnavailable(IdentityPersistenceException exception) {
+        var detail = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE,
+            "Identity storage is unavailable or the operation is not yet enabled.");
+        detail.setTitle("Service Unavailable");
+        detail.setProperty("code", exception.code());
+        return detail;
+    }
     @ExceptionHandler({BadCredentialsException.class, InvalidRefreshTokenException.class,
                        RefreshTokenReuseException.class})
     ProblemDetail unauthenticated(RuntimeException exception) {

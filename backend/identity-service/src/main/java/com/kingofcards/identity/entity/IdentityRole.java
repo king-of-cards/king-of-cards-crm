@@ -1,18 +1,12 @@
 package com.kingofcards.identity.entity;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.Id;
-import jakarta.persistence.Table;
 
-@Entity
-@Table(name = "identity_role")
 public class IdentityRole {
-    @Id
-    @Column(name = "role_code", nullable = false, length = 40)
+    public static final java.util.Set<String> SUPPORTED_CODES = java.util.Set.of("CRM_ADMIN", "CRM_VENDOR");
+
+
     private String code;
 
-    @Column(name = "display_name", nullable = false, length = 80)
     private String displayName;
 
     protected IdentityRole() {}

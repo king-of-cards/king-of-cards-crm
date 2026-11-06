@@ -3,52 +3,55 @@ package com.kingofcards.identity.service;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
-import java.util.Optional;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import com.kingofcards.identity.entity.IdentityRole;
 import com.kingofcards.identity.entity.IdentityUser;
-import com.kingofcards.identity.repository.IdentityRoleRepository;
 import com.kingofcards.identity.repository.IdentityUserRepository;
+import com.kingofcards.identity.exception.IdentityPersistenceException;
 
-@ExtendWith(MockitoExtension.class)
 class AdminBootstrapServiceTest {
-    @Mock IdentityUserRepository users;
-    @Mock IdentityRoleRepository roles;
-    @Mock PasswordEncoder encoder;
-
-    @Test
-    void createsOnlyTheFirstAdminWithHashedPassword() {
-        IdentityRole adminRole = new IdentityRole("CRM_ADMIN", "CRM Administrator");
-        when(roles.findByCodeForUpdate("CRM_ADMIN")).thenReturn(Optional.of(adminRole));
-        when(users.count()).thenReturn(0L);
-        when(users.findByNormalizedEmail("admin@example.com")).thenReturn(Optional.empty());
-        when(encoder.encode("a-long-synthetic-password")).thenReturn("bcrypt-hash");
-
-        new AdminBootstrapService(users, roles, encoder)
-            .createFirstAdministrator("Admin@Example.com", "a-long-synthetic-password");
-
-        ArgumentCaptor<IdentityUser> saved = ArgumentCaptor.forClass(IdentityUser.class);
-        verify(users).save(saved.capture());
-        assertEquals("admin@example.com", saved.getValue().getNormalizedEmail());
-        assertEquals("bcrypt-hash", saved.getValue().getPasswordHash());
-        assertTrue(saved.getValue().isEnabled());
-        assertTrue(saved.getValue().getRoles().stream().anyMatch(role -> role.getCode().equals("CRM_ADMIN")));
+    @Test void namedBootstrapTrimsNameAndStillUsesOnlyAtomicFirstAdminOperation() {
+        var users=mock(IdentityUserRepository.class); var encoder=mock(PasswordEncoder.class);
+        when(encoder.encode("synthetic-password")).thenReturn("bcrypt-hash");
+        new AdminBootstrapService(users,encoder).createFirstAdministrator("admin@example.test","synthetic-password","  Administrator  ");
+        var account=ArgumentCaptor.forClass(IdentityUser.class);
+        verify(users).createFirstAdministrator(account.capture()); verifyNoMoreInteractions(users);
+        assertEquals("Administrator",account.getValue().getDisplayName());
     }
-
-    @Test
-    void refusesBootstrapWhenAnyUserAlreadyExists() {
-        when(roles.findByCodeForUpdate("CRM_ADMIN"))
-            .thenReturn(Optional.of(new IdentityRole("CRM_ADMIN", "CRM Administrator")));
-        when(users.count()).thenReturn(1L);
-
-        assertThrows(IllegalStateException.class, () -> new AdminBootstrapService(users, roles, encoder)
-            .createFirstAdministrator("admin@example.com", "a-long-synthetic-password"));
+    @Test void namedBootstrapRejectsMissingNameBeforeAnyHashingOrWriting() {
+        var users=mock(IdentityUserRepository.class); var encoder=mock(PasswordEncoder.class);
+        assertThrows(IllegalArgumentException.class,()->new AdminBootstrapService(users,encoder)
+            .createFirstAdministrator("admin@example.test","synthetic-password"," "));
+        verifyNoInteractions(users,encoder);
+    }
+    @Test void rejectsPasswordsOverBcryptUtf8ByteLimitBeforeHashingOrWriting() {
+        var users = mock(IdentityUserRepository.class);
+        var encoder = mock(PasswordEncoder.class);
+        assertThrows(IllegalArgumentException.class, () -> new AdminBootstrapService(users, encoder)
+            .createFirstAdministrator("admin@example.test", "é".repeat(37)));
+        verifyNoInteractions(users, encoder);
+    }
+    @Test void delegatesEmptyStoreAndUniqueEmailToOneAtomicOperation() {
+        var users = mock(IdentityUserRepository.class);
+        var encoder = mock(PasswordEncoder.class);
+        when(encoder.encode("synthetic-password")).thenReturn("bcrypt-hash");
+        new AdminBootstrapService(users, encoder).createFirstAdministrator(" Admin@Example.com ", "synthetic-password");
+        var saved = ArgumentCaptor.forClass(IdentityUser.class);
+        verify(users).createFirstAdministrator(saved.capture());
+        verifyNoMoreInteractions(users); // no unsafe count or read-then-save
+        assertEquals("admin@example.com", saved.getValue().getEmail());
+        assertEquals("bcrypt-hash", saved.getValue().getPasswordHash());
+        assertEquals("CRM_ADMIN", saved.getValue().getRoles().iterator().next().getCode());
+    }
+    @Test void propagatesGatedOrAmbiguousCreationWithoutRetryOrFallback() {
+        var users = mock(IdentityUserRepository.class);
+        var encoder = mock(PasswordEncoder.class);
+        when(encoder.encode(anyString())).thenReturn("bcrypt-hash");
+        doThrow(IdentityPersistenceException.gated()).when(users).createFirstAdministrator(any());
+        assertThrows(IdentityPersistenceException.class, () -> new AdminBootstrapService(users, encoder)
+            .createFirstAdministrator("admin@example.com", "synthetic-password"));
+        verify(users, times(1)).createFirstAdministrator(any());
         verify(users, never()).save(any());
-        verifyNoInteractions(encoder);
     }
 }

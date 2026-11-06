@@ -18,8 +18,8 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 import com.kingofcards.crm.config.SecurityConfig;
 
-@WebMvcTest
-@Import({SecurityConfig.class, CrmAuthorizationTest.TestConfigurationBeans.class})
+@WebMvcTest(com.kingofcards.crm.controller.HealthController.class)
+@Import({SecurityConfig.class, com.kingofcards.crm.config.TestAccountStatusConfiguration.class, CrmAuthorizationTest.TestConfigurationBeans.class})
 class CrmAuthorizationTest {
     @Autowired MockMvc mvc;
     @Test
